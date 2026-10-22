@@ -86,6 +86,12 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const skills = new Map(); // tool_use id | user-message uuid -> record
   const commands = new Map(); // user-message uuid -> record
   const titles = new Map(); // sessionId -> ai title
+  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url> } (for the adoption report)
+  const sessions = new Map();
+  const sessionInfo = (id) => {
+    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set() });
+    return sessions.get(id);
+  };
   const calibration = createCalibration();
   const attributed = []; // token-attribution items from every file
 
@@ -105,6 +111,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         !line.includes('"type":"assistant"') &&
         !line.includes('"type":"user"') &&
         !line.includes('"type":"ai-title"') &&
+        !line.includes('"type":"pr-link"') &&
         !line.includes('"subtype":"compact_boundary"')
       ) {
         continue;
@@ -118,6 +125,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
 
       if (d.type === 'ai-title') {
         if (d.sessionId && d.aiTitle) titles.set(d.sessionId, d.aiTitle);
+        continue;
+      }
+      if (d.type === 'pr-link') {
+        if (d.sessionId && d.prUrl) sessionInfo(d.sessionId).prs.add(d.prUrl);
         continue;
       }
       if (d.type === 'system') {
@@ -164,7 +175,11 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
           if (!c || (c.type !== 'tool_use' && c.type !== 'server_tool_use') || !c.name) continue;
           const id = c.id ?? `${d.uuid}:${c.name}`;
           const tool = { ...base, name: c.name };
-          if (AGENT_TOOLS.has(c.name)) tool.subagentType = c.input?.subagent_type || 'general-purpose';
+          if (AGENT_TOOLS.has(c.name)) {
+            tool.subagentType = c.input?.subagent_type || 'general-purpose';
+            if (c.input?.run_in_background) tool.background = true;
+          }
+          if (c.input?.isolation === 'worktree' || c.name === 'EnterWorktree') tool.worktree = true;
           tools.set(id, tool);
           attribution.toolUse(key, id, JSON.stringify(c.input ?? {}).length, c.name === 'Skill');
           if (c.name === 'Skill' && c.input?.skill) {
@@ -193,7 +208,15 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         attribution.skillContent(text.length); // loaded by a Skill tool call
       }
       // Text from the user (not tool results, skill content or injected meta) ends a tool loop.
-      if (text && !isSkillContent && !d.isMeta) attribution.human();
+      if (text && !isSkillContent && !d.isMeta) {
+        attribution.human();
+        // Prompts a person sent - not agent-to-agent or task notifications, not subagent tasks.
+        const origin = d.origin?.kind ?? 'human';
+        if (!agent && !d.isSidechain && origin === 'human' && d.promptSource !== 'system') {
+          sessionInfo(base.sessionId).prompts.add(d.uuid ?? `${file}:${base.timestamp}`);
+        }
+      }
+      if (!agent && d.entrypoint) sessionInfo(base.sessionId).entrypoint ??= d.entrypoint;
       const match = COMMAND_RE.exec(text);
       if (match) {
         const name = '/' + normalizeSkillName(match[1]);
@@ -219,6 +242,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   }
 
   return {
+    sessions,
     charsPerToken: charsPerToken(calibration),
     files: files.length,
     usage: [...usage.values()],

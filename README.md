@@ -62,6 +62,30 @@ subagents run in their own context window.
 | `session` | the session's peak | **Avg Context**: its average request |
 | others + summary | the largest peak of any session | **Avg Max Context**: session peaks averaged |
 
+### Adoption assessment
+
+`ccreports adoption` is modelled on GitHub Copilot's adoption cohorts, with
+your sessions as the unit. Each session lands in the first phase that fits:
+
+| Phase | Rule |
+|---|---|
+| Chat | no code edits and no PR |
+| Phase 3 · Multi-agent | 2+ subagents, a background agent, a worktree, or agents messaging each other |
+| Phase 2 · Agent-first | 10+ tool calls per prompt you typed |
+| Phase 1 · Assisted | everything else that changed code |
+
+The report opens with a short written assessment, then shows the cohorts (as
+cards in HTML) with PRs, edits, tool calls per prompt, tokens and cost per
+session; the phase mix per week; how many sessions use each capability
+(skills, subagents, background agents, worktrees, MCP, web, PRs); and usage by
+surface (CLI, desktop, IDE, SDK). PRs are the `pr-link` entries Claude Code
+records when it creates a PR; prompts exclude agent-to-agent messages and
+task notifications. `--json` returns the per-session stats and phase.
+
+```sh
+node bin/ccreports.mjs adoption -s 20261001 -f html -o adoption.html
+```
+
 ### Output formats
 
 | Format | Notes |

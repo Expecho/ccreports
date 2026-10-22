@@ -1,7 +1,7 @@
 // Groups loaded records into report buckets (daily, weekly, monthly, session,
 // project or a single summary bucket).
 
-export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project'];
+export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption'];
 
 export function dateFormatter(timeZone) {
   // en-CA formats as YYYY-MM-DD.

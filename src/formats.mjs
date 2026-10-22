@@ -74,6 +74,7 @@ function terminalTable({ columns, rows }, c) {
 export function toTerminal(doc, { color = false } = {}) {
   const c = paint(color);
   const out = [c.bold(doc.title)];
+  if (doc.summary?.length) out.push(...doc.summary.map((l) => `• ${l}`), '');
   doc.sections.forEach((s, i) => {
     if (s.title) out.push((i > 0 ? '\n' : '') + c.bold(s.title) + (s.note ? c.dim(`  (${s.note})`) : ''));
     out.push(terminalTable(s, c));
@@ -87,6 +88,7 @@ const mdEscape = (s) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/
 
 export function toMarkdown(doc) {
   const out = [`# ${doc.title}`];
+  if (doc.summary?.length) out.push('', ...doc.summary.map((l) => `- ${l}`));
   for (const s of doc.sections) {
     out.push('');
     if (s.title) out.push(`## ${s.title}${s.note ? ` _(${s.note})_` : ''}`, '');
@@ -177,17 +179,35 @@ function htmlTable({ columns, rows }) {
   return `${controls}<div class="scroll"><table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>`;
 }
 
+/**
+ * A cards section: one card per row. Column 0 is the title, column 1 the
+ * subtitle, column 2 the headline figure; the rest is a label/value list.
+ */
+function htmlCards({ columns, rows }) {
+  const cards = rows.map(({ cells }) => {
+    const details = columns
+      .slice(3)
+      .map((col, i) => `<dt>${esc(col.title)}</dt><dd>${esc(cellText(cells[i + 3]))}</dd>`)
+      .join('');
+    return `<div class="card"><h3>${esc(cellText(cells[0]))}</h3><p class="sub">${esc(cellText(cells[1]))}</p><p class="big">${esc(cellText(cells[2]))} <small>${esc(columns[2].title.toLowerCase())}</small></p><dl>${details}</dl></div>`;
+  });
+  return `<div class="cards">${cards.join('\n')}</div>`;
+}
+
 export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
   const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}`];
   if (pricingSource) {
     meta.push(`cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
   }
   const sections = doc.sections
-    .map(
-      (s) =>
-        `<section>${s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : ''}\n${htmlTable(s)}</section>`,
-    )
+    .map((s) => {
+      const heading = s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
+      return s.cards ? `<section class="plain">${heading}\n${htmlCards(s)}</section>` : `<section>${heading}\n${htmlTable(s)}</section>`;
+    })
     .join('\n');
+  const summary = doc.summary?.length
+    ? `<ul class="summary">${doc.summary.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>\n`
+    : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -208,6 +228,17 @@ h1 { font-size:22px; margin:0 0 4px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 16px; }
 h2 { font-size:15px; margin:0 0 10px; }
 .note { color:var(--muted); font-weight:normal; font-size:13px; }
+.summary { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px; margin:0 0 16px; padding:12px 16px 12px 34px; }
+.summary li { margin:3px 0; }
+section.plain { background:none; border:0; padding:0; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+.card h3 { font-size:15px; margin:0 0 2px; }
+.card .sub { color:var(--muted); font-size:13px; margin:0 0 10px; }
+.card .big { font-size:24px; font-weight:600; margin:0 0 10px; font-variant-numeric:tabular-nums; }
+.card .big small { font-size:13px; font-weight:normal; color:var(--muted); }
+.card dl { display:grid; grid-template-columns:1fr auto; gap:4px 12px; margin:0; padding-top:10px; border-top:1px solid var(--line); font-size:13px; font-variant-numeric:tabular-nums; }
+.card dt { color:var(--muted); } .card dd { margin:0; text-align:right; }
 .scroll { overflow-x:auto; }
 table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
 th, td { padding:5px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
@@ -235,7 +266,7 @@ tbody tr:not(.total):hover td { background-color:var(--bar); }
 <main>
 <h1>${esc(doc.title)}</h1>
 <p class="meta">${esc(meta.join(' · '))}</p>
-${sections}
+${summary}${sections}
 </main>
 <script>
 // Breakdown: click a row (or its toggle) to show/hide its sub-rows; the

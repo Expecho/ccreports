@@ -6,6 +6,7 @@ import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
+import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 
 const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 
@@ -18,6 +19,7 @@ Reports:
   monthly        One row per month
   session        One row per session
   project        One row per project (working directory)
+  adoption       Adoption assessment: sessions by phase (chat, assisted, agent-first, multi-agent)
 
 Options:
   -s, --since <date>     Include from this date (YYYYMMDD or YYYY-MM-DD)
@@ -135,21 +137,42 @@ if (showCost) {
   if (unpriced.length) console.error(`ccreports: no price for ${unpriced.join(', ')}; counted as $0.`);
 }
 
+// Only the terminal table hides columns to fit the screen.
+const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));
+const docOpts = {
+  compact,
+  showCost,
+  breakdown: opts.breakdown,
+  top,
+  since,
+  until,
+  timeZone: opts.timezone,
+  project: opts.project,
+  pricer,
+};
+
 let output;
 if (format === 'json') {
   const meta = { report, since, until, pricingSource };
-  const json =
-    report === 'summary'
-      ? { ...meta, totals: toJSON(result.totals) }
-      : { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
+  let json;
+  if (report === 'adoption') {
+    const { summary, stats } = buildAdoption(data, docOpts);
+    json = { ...meta, summary, phases: PHASES, autonomyThreshold: AUTONOMY_THRESHOLD, sessions: stats };
+  } else if (report === 'summary') {
+    json = { ...meta, totals: toJSON(result.totals) };
+  } else {
+    json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
+  }
   output = JSON.stringify(json, null, 2) + '\n';
 } else if (result.totals.sessions.size === 0) {
   fail('no usage found for the selected filters.');
 } else {
-  // Only the terminal table hides columns to fit the screen.
-  const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));
-  const docOpts = { compact, showCost, breakdown: opts.breakdown, top, since, until, timeZone: opts.timezone };
-  const doc = report === 'summary' ? buildSummary(result, docOpts) : buildPeriodReport(report, result, docOpts);
+  const doc =
+    report === 'adoption'
+      ? buildAdoption(data, docOpts)
+      : report === 'summary'
+        ? buildSummary(result, docOpts)
+        : buildPeriodReport(report, result, docOpts);
   output = {
     table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR }) + '\n',
     markdown: () => toMarkdown(doc),
