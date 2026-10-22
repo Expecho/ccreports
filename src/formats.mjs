@@ -131,33 +131,54 @@ const esc = (s) =>
   String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
 function htmlTable({ columns, rows }) {
-  const sortable = !rows.some((r) => r.style === 'sub');
+  const hasSubRows = rows.some((r) => r.style === 'sub');
+  const sortable = !hasSubRows;
   const head = columns
     .map((col) => `<th class="${col.align}"${sortable ? ' data-sort' : ''}>${esc(col.title)}</th>`)
     .join('');
+
+  // Breakdown sub-rows start collapsed under the row they follow.
+  let group = -1;
   const body = rows
-    .map((r) => {
+    .map((r, index) => {
+      const isSub = r.style === 'sub';
+      if (!isSub) group = index;
+      const hasChildren = !isSub && rows[index + 1]?.style === 'sub';
       const cells = r.cells
         .map((cell, i) => {
           const col = columns[i];
           const v = cellValue(cell);
-          const attrs = [`class="${col.align}"`];
+          const classes = [col.align];
+          if (cell?.kind === 'pct') classes.push('bar');
+          const attrs = [`class="${classes.join(' ')}"`];
           if (v != null) attrs.push(`data-v="${v}"`);
           if (cell?.kind === 'pct' && cell.v != null) attrs.push(`style="--p:${(cell.v * 100).toFixed(2)}%"`);
-          const cls = cell?.kind === 'pct' ? ' bar' : '';
-          if (cls) attrs[0] = `class="${col.align}${cls}"`;
-          return `<td ${attrs.join(' ')}>${esc(cellText(cell))}</td>`;
+          const toggle =
+            i === 0 && hasChildren
+              ? '<button type="button" class="toggle" aria-expanded="false" aria-label="Show breakdown"></button>'
+              : '';
+          return `<td ${attrs.join(' ')}>${toggle}${esc(cellText(cell))}</td>`;
         })
         .join('');
-      return `<tr${r.style ? ` class="${r.style}"` : ''}>${cells}</tr>`;
+      const rowAttrs = [];
+      if (r.style) rowAttrs.push(`class="${r.style}"`);
+      if (isSub) rowAttrs.push(`data-parent="${group}" hidden`);
+      if (hasChildren) rowAttrs.push(`data-group="${group}"`);
+      return `<tr${rowAttrs.length ? ' ' + rowAttrs.join(' ') : ''}>${cells}</tr>`;
     })
     .join('\n');
-  return `<div class="scroll"><table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>`;
+
+  const controls = hasSubRows
+    ? '<div class="controls"><button type="button" data-expand="all">Expand all</button><button type="button" data-expand="none">Collapse all</button></div>\n'
+    : '';
+  return `${controls}<div class="scroll"><table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>`;
 }
 
 export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
   const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}`];
-  if (pricingSource) meta.push(`cost estimates from ${pricingSource === 'builtin' ? 'built-in' : 'LiteLLM'} prices`);
+  if (pricingSource) {
+    meta.push(`cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
+  }
   const sections = doc.sections
     .map(
       (s) =>
@@ -193,7 +214,16 @@ th[data-sort]:hover { color:var(--accent); }
 .left { text-align:left; } .right { text-align:right; }
 td.bar { background:linear-gradient(to left, var(--bar) var(--p), transparent var(--p)); }
 tr.sub td { color:var(--muted); font-size:13px; }
-tr.sub td:first-child { padding-left:28px; }
+tr.sub td:first-child { padding-left:40px; }
+tr.sub[hidden] { display:none; }
+.controls { display:flex; gap:8px; margin:0 0 10px; }
+.controls button { font:inherit; font-size:13px; color:var(--fg); background:transparent; border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }
+.controls button:hover { border-color:var(--accent); color:var(--accent); }
+.toggle { font:inherit; width:20px; height:20px; margin:0 6px 0 -4px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--muted); cursor:pointer; vertical-align:middle; }
+.toggle::before { content:"▸"; display:inline-block; transition:transform .12s; }
+.toggle[aria-expanded="true"]::before { transform:rotate(90deg); }
+.toggle:hover { color:var(--accent); background:var(--bar); }
+tr[data-group] { cursor:pointer; }
 tr.total td { font-weight:600; background:var(--total); border-top:2px solid var(--line); }
 tbody tr:not(.total):hover td { background-color:var(--bar); }
 </style>
@@ -205,6 +235,25 @@ tbody tr:not(.total):hover td { background-color:var(--bar); }
 ${sections}
 </main>
 <script>
+// Breakdown: click a row (or its toggle) to show/hide its sub-rows; the
+// buttons above a table expand or collapse every row in it.
+function setExpanded(row, open) {
+  const body = row.parentElement;
+  body.querySelectorAll('tr[data-parent="' + row.dataset.group + '"]').forEach((r) => (r.hidden = !open));
+  const btn = row.querySelector('.toggle');
+  btn.setAttribute('aria-expanded', String(open));
+  btn.setAttribute('aria-label', open ? 'Hide breakdown' : 'Show breakdown');
+}
+document.querySelectorAll('tr[data-group]').forEach((row) => {
+  row.addEventListener('click', () => setExpanded(row, row.querySelector('.toggle').getAttribute('aria-expanded') !== 'true'));
+});
+document.querySelectorAll('[data-expand]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const table = btn.closest('section').querySelector('table');
+    table.querySelectorAll('tr[data-group]').forEach((row) => setExpanded(row, btn.dataset.expand === 'all'));
+  });
+});
+
 // Click a column header to sort (totals row stays last).
 document.querySelectorAll('th[data-sort]').forEach((th) => {
   th.addEventListener('click', () => {

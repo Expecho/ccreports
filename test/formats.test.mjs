@@ -55,11 +55,16 @@ test('html: escapes content, adds sort values and share bars', () => {
   assert.match(out, /<title>Test &lt;report&gt;<\/title>/);
   assert.match(out, /data-v="1234">1,234</);
   assert.match(out, /class="right bar" data-v="0.25" style="--p:25.00%"/);
-  assert.match(out, /<tr class="sub">/);
+  // Sub-rows start collapsed under their parent, which gets a toggle; the table gets expand/collapse-all.
+  assert.match(out, /<tr data-group="0"><td class="left"><button type="button" class="toggle" aria-expanded="false"/);
+  assert.match(out, /<tr class="sub" data-parent="0" hidden>/);
+  assert.match(out, /data-expand="all">Expand all</);
+  assert.match(out, /data-expand="none">Collapse all</);
+  assert.doesNotMatch(out, /<tr class="total"[^>]*data-group/);
   assert.match(out, /<tr class="total">/);
   // Tables with sub-rows are not sortable (sorting would detach them from their parent row).
   assert.doesNotMatch(out, /<th [^>]*data-sort/);
   const flat = toHtml({ ...doc, sections: [{ ...doc.sections[0], rows: [doc.sections[0].rows[0]] }] });
   assert.match(flat, /<th class="left" data-sort>Tool<\/th>/);
-  assert.match(out, /cost estimates from LiteLLM prices/);
+  assert.match(out, /cost estimates at Claude API list prices/);
 });

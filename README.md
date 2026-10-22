@@ -93,16 +93,22 @@ Warnings (unpriced models, built-in prices) go to stderr, so redirected output s
   `.meta.json`), next to a `(main session)` row; *Launches* counts `Agent`
   tool calls by requested `subagent_type`. The *Agents* column in period
   reports is the number of launches.
-- **Cost** – estimated per request from [LiteLLM's price
-  list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
-  (the source ccusage uses), cached for 24h in `%LOCALAPPDATA%\ccreports` /
-  `~/.cache/ccreports`; falls back to the cache, then a built-in snapshot.
-  5-minute and 1-hour cache writes are priced separately, and a request whose
-  full input exceeds a model's long-context threshold is billed at that tier.
-  Fast-mode surcharges are not applied. Models without a price count as $0
-  and are reported on stderr. Results match `ccusage`. These are API list
-  prices, so on a subscription plan they show what the usage *would* cost,
-  not what you pay.
+- **Cost** – estimated per request at Claude API list prices, parsed from
+  Anthropic's [pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
+  and cached for 24h in `%LOCALAPPDATA%\ccreports` / `~/.cache/ccreports`;
+  falls back to the cache, then a built-in snapshot of the page. Applied as
+  the page describes:
+  - 5-minute and 1-hour cache writes and cache reads at each model's own rate;
+  - Haiku 5.5's higher prices when a request's prompt (input + cache reads and
+    writes) is over 100k tokens;
+  - fast-mode prices when `usage.speed` is `fast` (cache multipliers on top);
+  - 1.1× for US-only inference (`usage.inference_geo` = `us`);
+  - web searches at $10 per 1,000.
+
+  Models without a price count as $0 and are reported on stderr. These are
+  API list prices, so on a subscription plan they show what the usage *would*
+  cost, not what you pay; Batch discounts and Bedrock / Vertex pricing don't
+  apply to Claude Code sessions and aren't modeled.
 
 The transcript format is undocumented and changes between Claude Code versions;
 the parser ignores line types it doesn't know. Claude Code deletes transcripts

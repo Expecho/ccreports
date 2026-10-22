@@ -118,13 +118,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
 
     if (breakdown) {
       const limit = top > 0 ? top : Infinity;
-      for (const [name, count] of ranked(b.tools).slice(0, limit)) rows.push(subRow(b, `tool ${name}`, count, 0));
+      for (const [name, count] of ranked(b.tools).slice(0, limit)) rows.push(subRow(b, `[tool] ${name}`, count, 0));
       for (const [name, s] of ranked(b.skills, (s) => s.model + s.user).slice(0, limit))
-        rows.push(subRow(b, `skill ${name}`, s.model + s.user, 1));
-      for (const [name, count] of ranked(b.commands).slice(0, limit)) rows.push(subRow(b, `cmd ${name}`, count, 2));
+        rows.push(subRow(b, `[skill] ${name}`, s.model + s.user, 1));
+      for (const [name, count] of ranked(b.commands).slice(0, limit)) rows.push(subRow(b, `[cmd] ${name}`, count, 2));
       const launched = [...b.agents].filter(([, a]) => a.launches > 0);
       for (const [name, a] of launched.sort((x, y) => y[1].launches - x[1].launches).slice(0, limit))
-        rows.push(subRow(b, `agent ${name}`, a.launches, 3));
+        rows.push(subRow(b, `[agent] ${name}`, a.launches, 3));
     }
   }
 

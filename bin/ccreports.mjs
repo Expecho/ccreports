@@ -129,7 +129,7 @@ if (opts.order === 'desc') result.buckets.reverse();
 // Warnings go to stderr so redirected output stays clean.
 if (showCost) {
   if (pricingSource === 'builtin') {
-    console.error('ccreports: pricing list unavailable, using built-in prices (may be out of date).');
+    console.error('ccreports: Anthropic pricing page unavailable, using built-in prices (may be out of date).');
   }
   const unpriced = [...result.totals.unpricedModels];
   if (unpriced.length) console.error(`ccreports: no price for ${unpriced.join(', ')}; counted as $0.`);

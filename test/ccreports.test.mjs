@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadRecords, normalizeSkillName } from '../src/loader.mjs';
 import { aggregate, parseDateArg, toJSON, MAIN_AGENT } from '../src/aggregate.mjs';
-import { createPricer } from '../src/pricing.mjs';
+import { createPricer, parsePricingPage, BUILTIN } from '../src/pricing.mjs';
 import { buildPeriodReport } from '../src/report.mjs';
 
 const base = { sessionId: 's1', cwd: '/work/app' };
@@ -118,7 +118,7 @@ test('period report shows sessions and per-session averages on breakdown rows', 
     const { columns, rows } = buildPeriodReport('monthly', result, { breakdown: true, top: 0 }).sections[0];
     const col = (title) => columns.findIndex((c) => c.title === title);
     assert.equal(rows[0].cells[col('Sessions')], 1);
-    const bash = rows.find((r) => r.cells[0] === 'tool Bash');
+    const bash = rows.find((r) => r.cells[0] === '[tool] Bash');
     assert.deepEqual(bash.cells[col('Per Session')], { kind: 'avg', v: 1 });
 
     const plain = buildPeriodReport('monthly', result, {}).sections[0];
@@ -176,25 +176,68 @@ test('attributes tokens and launches to subagent types', async () => {
   }
 });
 
-test('prices usage with 1h cache writes and long-context tiers', () => {
+test('prices usage at Claude API rates with tiers and modifiers', () => {
+  // Prices per million tokens; tokens below are in millions to keep the math readable.
+  const M = 1e6;
   const pricer = createPricer({
-    'claude-test': {
-      input_cost_per_token: 1,
-      output_cost_per_token: 10,
-      cache_creation_input_token_cost: 2,
-      cache_creation_input_token_cost_above_1hr: 3,
-      cache_read_input_token_cost: 0.5,
-      input_cost_per_token_above_100k_tokens: 100,
-      output_cost_per_token_above_100k_tokens: 1000,
+    'claude-test-1-0': {
+      input: 1,
+      cacheWrite5m: 2,
+      cacheWrite1h: 3,
+      cacheRead: 0.5,
+      output: 10,
+      fast: { input: 4, output: 40 },
+      longContext: { threshold: 100 * M, input: 100, cacheWrite5m: 200, cacheWrite1h: 300, cacheRead: 50, output: 1000 },
     },
   });
-  const rec = { model: 'claude-test', inputTokens: 1, outputTokens: 1, cacheCreationTokens: 3, cacheCreation1hTokens: 1, cacheReadTokens: 2 };
+  const rec = { model: 'claude-test-1-0', inputTokens: M, outputTokens: M, cacheCreationTokens: 3 * M, cacheCreation1hTokens: M, cacheReadTokens: 2 * M };
   // 1*1 + 1*10 + 2*2 (5m) + 1*3 (1h) + 2*0.5
   assert.equal(pricer(rec), 19);
-  assert.equal(pricer({ ...rec, model: 'claude-test-20260101' }), 19); // dated id resolves
-  // Context over 100k: input and output switch tier, fields without a tier keep base rate.
-  const long = { ...rec, cacheReadTokens: 100_000 };
-  assert.equal(pricer(long), 100 + 1000 + 4 + 3 + 50_000);
+  assert.equal(pricer({ ...rec, model: 'claude-test-1-0-20260101' }), 19); // dated id
+  assert.equal(pricer({ ...rec, model: 'claude-1-0-test' }), 19); // legacy "claude-3-5-haiku" style id
+  assert.equal(pricer({ ...rec, model: 'claude-test-1-0[1m]' }), 19);
+  // Prompt over the threshold: every token at the higher prices.
+  assert.equal(pricer({ ...rec, cacheReadTokens: 100 * M }), 100 + 1000 + 400 + 300 + 5000);
+  // Fast: input 4, output 40, writes 1.25x / 2x fast input, read keeps the model's read ratio (0.5).
+  assert.equal(pricer({ ...rec, speed: 'fast' }), 4 + 40 + 2 * 5 + 8 + 2 * 2);
+  assert.ok(Math.abs(pricer({ ...rec, inferenceGeo: 'us' }) - 19 * 1.1) < 1e-9);
+  assert.equal(pricer({ ...rec, webSearchRequests: 100 }), 20);
   assert.equal(pricer({ ...rec, model: 'gpt-x' }), null);
   assert.equal(pricer.isPriced('gpt-x'), false);
+});
+
+test('parses the pricing page tables', () => {
+  const md = [
+    '## Model pricing',
+    '',
+    '| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |',
+    '| :-- | :-- | :-- | :-- | :-- | :-- |',
+    '| Claude Opus 5.5 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok<sup>2</sup> | $20 / MTok |',
+    '| Claude Opus 4.8 | $5 / MTok | $6.25 / MTok | $10 / MTok | $0.50 / MTok | $25 / MTok |',
+    '| Claude Mythos 5.1 ([limited availability](https://example.com)) | $10 / MTok | $12.50 / MTok | $20 / MTok | $0.25 / MTok | $50 / MTok |',
+    '| Claude Sonnet 5.5 | $2 / MTok | $2.50 / MTok | $4 / MTok | $0.10 / MTok<sup>2</sup> | $10 / MTok |',
+    '| Claude Haiku 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |',
+    '| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |',
+    '',
+    '## Cloud platform pricing',
+    '| Claude Opus 5.5 | $99 / MTok | $99 / MTok | $99 / MTok | $99 / MTok | $99 / MTok |',
+    '',
+    '### Fast mode pricing',
+    '| Model | Input | Output |',
+    '| --- | --- | --- |',
+    '| Claude Opus 5.5 | $8 USD / MTok | $40 USD / MTok |',
+    '| Claude Opus 5 / Claude Opus 4.8 | $10 USD / MTok | $50 USD / MTok |',
+  ].join('\n');
+  const table = parsePricingPage(md);
+  assert.deepEqual(Object.keys(table).sort(), [
+    'claude-haiku-5-5',
+    'claude-mythos-5-1',
+    'claude-opus-4-8',
+    'claude-opus-5-5',
+    'claude-sonnet-5-5',
+  ]);
+  assert.deepEqual(table['claude-opus-5-5'], { ...BUILTIN['claude-opus-5-5'] }); // other sections ignored
+  assert.deepEqual(table['claude-opus-4-8'].fast, { input: 10, output: 50 });
+  assert.deepEqual(table['claude-haiku-5-5'], BUILTIN['claude-haiku-5-5']);
+  assert.throws(() => parsePricingPage('# Something else'));
 });

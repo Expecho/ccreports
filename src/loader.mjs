@@ -138,6 +138,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
             cacheCreationTokens: u.cache_creation_input_tokens ?? 0,
             cacheCreation1hTokens: u.cache_creation?.ephemeral_1h_input_tokens ?? 0,
             cacheReadTokens: u.cache_read_input_tokens ?? 0,
+            // Price modifiers.
+            speed: u.speed,
+            inferenceGeo: u.inference_geo,
+            webSearchRequests: u.server_tool_use?.web_search_requests ?? 0,
           });
         }
         for (const c of Array.isArray(m.content) ? m.content : []) {
