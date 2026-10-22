@@ -86,12 +86,13 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const skills = new Map(); // tool_use id | user-message uuid -> record
   const commands = new Map(); // user-message uuid -> record
   const titles = new Map(); // sessionId -> ai title
-  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url> } (for the adoption report)
+  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid> } (adoption / recommendations)
   const sessions = new Map();
   const sessionInfo = (id) => {
-    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set() });
+    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set(), compactions: new Set() });
     return sessions.get(id);
   };
+  const sessionStart = new Map(); // sessionId -> { rank, timestamp, cwd } of its earliest record
   const calibration = createCalibration();
   const attributed = []; // token-attribution items from every file
 
@@ -132,7 +133,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         continue;
       }
       if (d.type === 'system') {
-        if (d.subtype === 'compact_boundary') attribution.compact();
+        if (d.subtype === 'compact_boundary') {
+          attribution.compact();
+          if (!agent && d.sessionId) sessionInfo(d.sessionId).compactions.add(d.uuid ?? d.timestamp);
+        }
         continue;
       }
 
@@ -143,6 +147,16 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         agent,
       };
       if (!base.timestamp) continue;
+      // A session's project is where it started: later records follow Claude into
+      // subfolders (and subagents into worktrees), which would split one session
+      // over several projects.
+      if (d.cwd) {
+        const start = sessionStart.get(base.sessionId);
+        const rank = agent ? 1 : 0; // the main conversation's own records win
+        if (!start || rank < start.rank || (rank === start.rank && base.timestamp < start.timestamp)) {
+          sessionStart.set(base.sessionId, { rank, timestamp: base.timestamp, cwd: d.cwd });
+        }
+      }
 
       if (d.type === 'assistant') {
         const m = d.message ?? {};
@@ -226,6 +240,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       }
     }
     attributed.push(...attribution.finish());
+  }
+
+  for (const map of [usage, tools, skills, commands]) {
+    for (const rec of map.values()) rec.project = sessionStart.get(rec.sessionId)?.cwd ?? rec.project;
   }
 
   // Resumed sessions repeat earlier history in a new file; per record keep the

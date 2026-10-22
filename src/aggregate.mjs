@@ -1,7 +1,7 @@
 // Groups loaded records into report buckets (daily, weekly, monthly, session,
 // project or a single summary bucket).
 
-export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption'];
+export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption', 'recommendations'];
 
 export function dateFormatter(timeZone) {
   // en-CA formats as YYYY-MM-DD.
@@ -146,6 +146,19 @@ function touch(bucket, rec) {
   bucket.projects.add(rec.project);
 }
 
+/** Predicate for the --since / --until / --project filters; also sets `rec.date`. */
+export function recordFilter({ since, until, project, timeZone } = {}) {
+  const toDate = dateFormatter(timeZone);
+  const projectFilter = project?.toLowerCase();
+  return (rec) => {
+    rec.date = toDate(rec.timestamp);
+    if (since && rec.date < since) return false;
+    if (until && rec.date > until) return false;
+    if (projectFilter && !String(rec.project).toLowerCase().includes(projectFilter)) return false;
+    return true;
+  };
+}
+
 /**
  * @param data   result of loadRecords()
  * @param opts   { report, since, until, project, timeZone, pricer } - pricer from
@@ -153,16 +166,12 @@ function touch(bucket, rec) {
  * @returns      { buckets: Bucket[], totals: Bucket }
  */
 export function aggregate(data, { report = 'summary', since, until, project, timeZone, pricer } = {}) {
-  const toDate = dateFormatter(timeZone);
-  const projectFilter = project?.toLowerCase();
+  const inRange = recordFilter({ since, until, project, timeZone });
   const buckets = new Map();
   const totals = newBucket('total');
 
   const accept = (rec) => {
-    rec.date = toDate(rec.timestamp);
-    if (since && rec.date < since) return null;
-    if (until && rec.date > until) return null;
-    if (projectFilter && !String(rec.project).toLowerCase().includes(projectFilter)) return null;
+    if (!inRange(rec)) return null;
     const key = groupKey(report, rec);
     if (!buckets.has(key)) buckets.set(key, newBucket(key));
     touch(buckets.get(key), rec);

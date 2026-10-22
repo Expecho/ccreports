@@ -88,6 +88,23 @@ test('loads and deduplicates records', async () => {
   }
 });
 
+test('a session keeps the project it started in', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  try {
+    const proj = path.join(root, '-work-app');
+    await mkdir(proj, { recursive: true });
+    const lines = [
+      { ...user('2026-10-01T10:00:00Z', 'u1', 'hi'), cwd: '/work/app' },
+      { ...assistant('2026-10-01T10:00:05Z', 'm1', 'r1', [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }]), cwd: '/work/app/tests' },
+    ];
+    await writeFile(path.join(proj, 's1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const data = await loadRecords({ dirs: [root] });
+    assert.deepEqual([...data.usage, ...data.tools].map((r) => r.project), ['/work/app', '/work/app']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('aggregates daily with filters', async () => {
   const root = await fixture();
   try {

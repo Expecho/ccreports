@@ -7,6 +7,30 @@ ccreports adds what you actually *did* with those tokens.
 
 Zero dependencies, Node.js 20+.
 
+## Install as a Claude Code plugin
+
+At the prompt of a Claude Code terminal session:
+
+```
+/plugin install ccreports --marketplace Expecho/ccreports
+```
+
+Answer `y` to add the marketplace, then pick a scope. From a shell:
+`claude plugin install ccreports --marketplace Expecho/ccreports`. In the
+desktop app: click + next to the prompt box, then Plugins, Add marketplace with
+`Expecho/ccreports`, then Add plugin.
+
+The plugin adds a `report` skill: ask Claude things like *"what did I spend on
+Claude Code this week?"* or *"which tools use most of my tokens?"*, or run it
+directly:
+
+```
+/ccreports:report adoption as html
+/ccreports:report weekly -b --since 20261001
+```
+
+Claude runs the bundled CLI (Node.js 20+ required) and explains the results.
+
 ## Usage
 
 ```sh
@@ -91,6 +115,30 @@ node bin/ccreports.mjs -s 20261001 --adoption -f html -o report.html   # summary
 assessment goes on top, the adoption tables after the report's own. In JSON
 it adds an `adoption` object.
 
+### Recommendations
+
+`ccreports recommendations` (or `-r` on any report) checks your usage for
+patterns worth changing. A recommendation only appears when the data clearly
+shows the pattern; each comes with its evidence, what to do, and, where it can
+be priced, the cost at stake (amounts overlap). Impact is the share of cost at
+stake: high from 15%, medium from 5%.
+
+| Fires when | Recommends |
+|---|---|
+| ≥25% of cost comes from requests with >200k tokens of context | new session or `/clear` per task, `/compact` with a focus |
+| a tool's results take ≥10% of all tokens, or ≥200k tokens per call | tool-specific trimming (Bash/PowerShell output, Read ranges, Edit over Write, lean skills, filters for MCP tools) |
+| main-session Read/Grep/Glob take ≥12% of tokens while subagents do <25% | delegate exploration to an Explore subagent |
+| subagents run on Opus/Fable and Sonnet 5.5 would save ≥$1 and ≥10% | `model: sonnet` / `haiku` for routine agents (repriced savings shown) |
+| ≥3 sessions (or ≥10%) hit compaction | split tasks, compact yourself at natural breaks |
+| mid-session cache rebuilds cost ≥5% | avoid model switches and resuming big contexts after long breaks |
+| ≥30% of coding sessions are Assisted | hand over whole tasks, plan mode, skills |
+| background agents and worktrees in <10% of sessions; skills in <10% | parallel work; recurring workflows as skills |
+
+```sh
+node bin/ccreports.mjs recommendations -s 20261001
+node bin/ccreports.mjs -s 20261001 -a -r -f html -o report.html   # summary + adoption + recommendations
+```
+
 ### Output formats
 
 | Format | Notes |
@@ -115,6 +163,7 @@ Warnings (unpriced models, built-in prices) go to stderr, so redirected output s
 | `-p, --project <text>` | Filter on project path (case-insensitive substring) |
 | `-b, --breakdown` | Per-row tool / skill / command sub-rows |
 | `-a, --adoption` | Append the adoption assessment to the report |
+| `-r, --recommendations` | Append best-practice recommendations to the report |
 | `-n, --top <n>` | Rows per ranked list (`0` = all) |
 | `-f, --format <fmt>` | `table` (default), `json`, `csv`, `markdown` / `md`, `html` |
 | `-j, --json` | Same as `--format json` |

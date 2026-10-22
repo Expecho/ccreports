@@ -1,0 +1,11 @@
+{
+  "name": "ccreports",
+  "owner": { "name": "Expecho" },
+  "plugins": [
+    {
+      "name": "ccreports",
+      "source": "./",
+      "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size and an adoption assessment"
+    }
+  ]
+}

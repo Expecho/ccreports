@@ -7,6 +7,7 @@ import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
 import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { buildRecommendations } from '../src/recommendations.mjs';
 
 const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 
@@ -20,6 +21,7 @@ Reports:
   session        One row per session
   project        One row per project (working directory)
   adoption       Adoption assessment: sessions by phase (chat, assisted, agent-first, multi-agent)
+  recommendations  Best-practice recommendations based on your usage, with the cost at stake
 
 Options:
   -s, --since <date>     Include from this date (YYYYMMDD or YYYY-MM-DD)
@@ -27,6 +29,7 @@ Options:
   -p, --project <text>   Only projects whose path contains <text> (case-insensitive)
   -b, --breakdown        Per-row tool / skill / command / agent sub-rows (period reports)
   -a, --adoption         Append the adoption assessment to the report
+  -r, --recommendations  Append best-practice recommendations to the report
   -n, --top <n>          Rows per ranked list (default 15 summary, 5 breakdown; 0 = all)
   -f, --format <fmt>     table (default), json, csv, markdown (md) or html
   -j, --json             Same as --format json
@@ -57,6 +60,7 @@ try {
       project: { type: 'string', short: 'p' },
       breakdown: { type: 'boolean', short: 'b' },
       adoption: { type: 'boolean', short: 'a' },
+      recommendations: { type: 'boolean', short: 'r' },
       top: { type: 'string', short: 'n' },
       format: { type: 'string', short: 'f' },
       json: { type: 'boolean', short: 'j' },
@@ -153,9 +157,10 @@ const docOpts = {
   pricer,
 };
 
-// The adoption assessment: its own report, or appended to another with --adoption.
-const withAdoption = report === 'adoption' || opts.adoption;
-const adoption = withAdoption ? buildAdoption(data, docOpts) : null;
+// The adoption assessment and recommendations: their own reports, or appended
+// to another with --adoption / --recommendations.
+const adoption = report === 'adoption' || opts.adoption ? buildAdoption(data, docOpts) : null;
+const advice = report === 'recommendations' || opts.recommendations ? buildRecommendations(data, docOpts) : null;
 
 let output;
 if (format === 'json') {
@@ -169,25 +174,25 @@ if (format === 'json') {
   let json;
   if (report === 'adoption') {
     json = { ...meta, ...adoptionJson };
+  } else if (report === 'recommendations') {
+    json = { ...meta, recommendations: advice.items };
   } else if (report === 'summary') {
     json = { ...meta, totals: toJSON(result.totals) };
   } else {
     json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
   }
   if (adoptionJson && report !== 'adoption') json.adoption = adoptionJson;
+  if (advice && report !== 'recommendations') json.recommendations = advice.items;
   output = JSON.stringify(json, null, 2) + '\n';
 } else if (result.totals.sessions.size === 0) {
   fail('no usage found for the selected filters.');
 } else {
-  let doc =
-    report === 'adoption'
-      ? adoption
-      : report === 'summary'
-        ? buildSummary(result, docOpts)
-        : buildPeriodReport(report, result, docOpts);
-  if (adoption && doc !== adoption) {
-    // Assessment on top, adoption tables after the report's own.
-    doc = { ...doc, summary: [...(doc.summary ?? []), ...adoption.summary], sections: [...doc.sections, ...adoption.sections] };
+  const own = { adoption, recommendations: advice }[report];
+  let doc = own ?? (report === 'summary' ? buildSummary(result, docOpts) : buildPeriodReport(report, result, docOpts));
+  // Appended parts: their summary lines on top, their sections after the report's own.
+  for (const part of [adoption, advice]) {
+    if (!part || part === doc) continue;
+    doc = { ...doc, summary: [...(doc.summary ?? []), ...part.summary], sections: [...doc.sections, ...part.sections] };
   }
   output = {
     table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR }) + '\n',

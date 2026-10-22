@@ -77,9 +77,31 @@ export function toTerminal(doc, { color = false } = {}) {
   if (doc.summary?.length) out.push(...doc.summary.map((l) => `• ${l}`), '');
   doc.sections.forEach((s, i) => {
     if (s.title) out.push((i > 0 ? '\n' : '') + c.bold(s.title) + (s.note ? c.dim(`  (${s.note})`) : ''));
-    out.push(terminalTable(s, c));
+    if (s.items) {
+      s.items.forEach((item, n) => {
+        out.push('', `${n + 1}. ${c.bold(item.title)}  ${c.dim(`[${itemImpact(item)}]`)}`);
+        out.push(`   ${c.dim('Evidence:')} ${item.evidence}`, `   ${c.cyan('→')} ${item.advice}`);
+      });
+    } else {
+      out.push(terminalTable(s, c));
+    }
   });
   return out.join('\n');
+}
+
+/** "high impact · $120.50 at stake" for a recommendation. */
+function itemImpact(item) {
+  return item.atStakeUSD != null ? `${item.impact} impact · ${cellText({ kind: 'usd', v: item.atStakeUSD })} at stake` : `${item.impact} impact`;
+}
+
+/** Recommendations as a table, for CSV. */
+function itemsTable(items) {
+  return {
+    columns: ['#', 'Recommendation', 'Impact', 'At stake (USD)', 'Evidence', 'Advice'].map((title) => ({ title })),
+    rows: items.map((item, n) => ({
+      cells: [n + 1, item.title, item.impact, item.atStakeUSD == null ? '' : { kind: 'usd', v: item.atStakeUSD }, item.evidence, item.advice],
+    })),
+  };
 }
 
 // ---------------------------------------------------------------- markdown
@@ -92,6 +114,12 @@ export function toMarkdown(doc) {
   for (const s of doc.sections) {
     out.push('');
     if (s.title) out.push(`## ${s.title}${s.note ? ` _(${s.note})_` : ''}`, '');
+    if (s.items) {
+      s.items.forEach((item, n) => {
+        out.push(`### ${n + 1}. ${item.title}`, '', `_${itemImpact(item)}_`, '', `**Evidence:** ${item.evidence}`, '', `**Do:** ${item.advice}`, '');
+      });
+      continue;
+    }
     out.push(`| ${s.columns.map((col) => mdEscape(col.title)).join(' | ')} |`);
     out.push(`| ${s.columns.map((col) => (col.align === 'right' ? '---:' : ':---')).join(' | ')} |`);
     for (const r of s.rows) {
@@ -118,7 +146,8 @@ const csvField = (s) => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 export function toCsv(doc) {
   return (
     doc.sections
-      .map((s) => {
+      .map((section) => {
+        const s = section.items ? itemsTable(section.items) : section;
         const lines = [s.columns.map((col) => csvField(col.title)).join(',')];
         for (const r of s.rows) {
           if (r.style === 'sub') continue;
@@ -183,6 +212,17 @@ function htmlTable({ columns, rows }) {
  * A cards section: one card per row. Column 0 is the title, column 1 the
  * subtitle, column 2 the headline figure; the rest is a label/value list.
  */
+/** Escaped text with `inline code` as <code>. */
+const escCode = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+
+function htmlItems(items) {
+  const list = items.map(
+    (item, n) =>
+      `<li class="rec ${item.impact}"><div class="rec-head"><span class="rec-n">${n + 1}</span><h3>${esc(item.title)}</h3><span class="badge">${esc(itemImpact(item))}</span></div><p class="evidence">${escCode(item.evidence)}</p><p class="advice">${escCode(item.advice)}</p></li>`,
+  );
+  return `<ol class="recs">${list.join('\n')}</ol>`;
+}
+
 function htmlCards({ columns, rows }) {
   const cards = rows.map(({ cells }) => {
     const details = columns
@@ -202,6 +242,7 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
   const sections = doc.sections
     .map((s) => {
       const heading = s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
+      if (s.items) return `<section class="plain">${heading}\n${htmlItems(s.items)}</section>`;
       return s.cards ? `<section class="plain">${heading}\n${htmlCards(s)}</section>` : `<section>${heading}\n${htmlTable(s)}</section>`;
     })
     .join('\n');
@@ -231,6 +272,16 @@ h2 { font-size:15px; margin:0 0 10px; }
 .summary { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px; margin:0 0 16px; padding:12px 16px 12px 34px; }
 .summary li { margin:3px 0; }
 section.plain { background:none; border:0; padding:0; }
+.recs { list-style:none; margin:0; padding:0; display:grid; gap:10px; }
+.rec { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--muted); border-radius:10px; padding:12px 16px; }
+.rec.high { border-left-color:#dc2626; } .rec.medium { border-left-color:#d97706; } .rec.low { border-left-color:var(--accent); }
+.rec-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.rec-n { color:var(--muted); font-variant-numeric:tabular-nums; }
+.rec h3 { font-size:15px; margin:0; }
+.badge { margin-left:auto; font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:1px 8px; }
+.evidence { color:var(--muted); margin:6px 0 4px; }
+.advice { margin:0; }
+code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.5px; background:var(--bar); border-radius:4px; padding:0 4px; }
 .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
 .card h3 { font-size:15px; margin:0 0 2px; }
