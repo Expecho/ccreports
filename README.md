@@ -84,7 +84,12 @@ task notifications. `--json` returns the per-session stats and phase.
 
 ```sh
 node bin/ccreports.mjs adoption -s 20261001 -f html -o adoption.html
+node bin/ccreports.mjs -s 20261001 --adoption -f html -o report.html   # summary + adoption
 ```
+
+`--adoption` (`-a`) appends the assessment to any report: the written
+assessment goes on top, the adoption tables after the report's own. In JSON
+it adds an `adoption` object.
 
 ### Output formats
 
@@ -109,6 +114,7 @@ Warnings (unpriced models, built-in prices) go to stderr, so redirected output s
 | `-s, --since` / `-u, --until` | Date range, `YYYYMMDD` or `YYYY-MM-DD` (inclusive) |
 | `-p, --project <text>` | Filter on project path (case-insensitive substring) |
 | `-b, --breakdown` | Per-row tool / skill / command sub-rows |
+| `-a, --adoption` | Append the adoption assessment to the report |
 | `-n, --top <n>` | Rows per ranked list (`0` = all) |
 | `-f, --format <fmt>` | `table` (default), `json`, `csv`, `markdown` / `md`, `html` |
 | `-j, --json` | Same as `--format json` |

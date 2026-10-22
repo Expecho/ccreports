@@ -26,6 +26,7 @@ Options:
   -u, --until <date>     Include up to and including this date
   -p, --project <text>   Only projects whose path contains <text> (case-insensitive)
   -b, --breakdown        Per-row tool / skill / command / agent sub-rows (period reports)
+  -a, --adoption         Append the adoption assessment to the report
   -n, --top <n>          Rows per ranked list (default 15 summary, 5 breakdown; 0 = all)
   -f, --format <fmt>     table (default), json, csv, markdown (md) or html
   -j, --json             Same as --format json
@@ -55,6 +56,7 @@ try {
       until: { type: 'string', short: 'u' },
       project: { type: 'string', short: 'p' },
       breakdown: { type: 'boolean', short: 'b' },
+      adoption: { type: 'boolean', short: 'a' },
       top: { type: 'string', short: 'n' },
       format: { type: 'string', short: 'f' },
       json: { type: 'boolean', short: 'j' },
@@ -151,28 +153,42 @@ const docOpts = {
   pricer,
 };
 
+// The adoption assessment: its own report, or appended to another with --adoption.
+const withAdoption = report === 'adoption' || opts.adoption;
+const adoption = withAdoption ? buildAdoption(data, docOpts) : null;
+
 let output;
 if (format === 'json') {
   const meta = { report, since, until, pricingSource };
+  const adoptionJson = adoption && {
+    summary: adoption.summary,
+    phases: PHASES,
+    autonomyThreshold: AUTONOMY_THRESHOLD,
+    sessions: adoption.stats,
+  };
   let json;
   if (report === 'adoption') {
-    const { summary, stats } = buildAdoption(data, docOpts);
-    json = { ...meta, summary, phases: PHASES, autonomyThreshold: AUTONOMY_THRESHOLD, sessions: stats };
+    json = { ...meta, ...adoptionJson };
   } else if (report === 'summary') {
     json = { ...meta, totals: toJSON(result.totals) };
   } else {
     json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
   }
+  if (adoptionJson && report !== 'adoption') json.adoption = adoptionJson;
   output = JSON.stringify(json, null, 2) + '\n';
 } else if (result.totals.sessions.size === 0) {
   fail('no usage found for the selected filters.');
 } else {
-  const doc =
+  let doc =
     report === 'adoption'
-      ? buildAdoption(data, docOpts)
+      ? adoption
       : report === 'summary'
         ? buildSummary(result, docOpts)
         : buildPeriodReport(report, result, docOpts);
+  if (adoption && doc !== adoption) {
+    // Assessment on top, adoption tables after the report's own.
+    doc = { ...doc, summary: [...(doc.summary ?? []), ...adoption.summary], sections: [...doc.sections, ...adoption.sections] };
+  }
   output = {
     table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR }) + '\n',
     markdown: () => toMarkdown(doc),
