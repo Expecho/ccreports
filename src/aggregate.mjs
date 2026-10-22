@@ -60,6 +60,14 @@ function newBucket(key) {
     skillCalls: 0,
     commandCount: 0,
     subagentLaunches: 0,
+    // Context = full prompt of a main-conversation request (input + cache write
+    // + cache read). Subagents have their own context window and are excluded.
+    contextTokensSum: 0,
+    contextRequests: 0,
+    sessionPeaks: new Map(), // sessionId -> largest context
+    maxContextTokens: 0,
+    avgContextTokens: 0,
+    avgSessionMaxContextTokens: 0,
     firstActivity: null,
     lastActivity: null,
     sessions: new Set(),
@@ -123,8 +131,14 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
     const buckets = accept(rec);
     if (!buckets) continue;
     const total = rec.inputTokens + rec.outputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
+    const context = rec.inputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
     const cost = pricer?.(rec) ?? 0;
     for (const b of buckets) {
+      if (rec.agent == null) {
+        b.contextTokensSum += context;
+        b.contextRequests += 1;
+        if (context > (b.sessionPeaks.get(rec.sessionId) ?? 0)) b.sessionPeaks.set(rec.sessionId, context);
+      }
       b.inputTokens += rec.inputTokens;
       b.outputTokens += rec.outputTokens;
       b.cacheCreationTokens += rec.cacheCreationTokens;
@@ -175,6 +189,12 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
   }
 
   const list = [...buckets.values()];
+  for (const b of [...list, totals]) {
+    const peaks = [...b.sessionPeaks.values()];
+    b.maxContextTokens = peaks.length ? Math.max(...peaks) : 0;
+    b.avgSessionMaxContextTokens = peaks.length ? Math.round(peaks.reduce((s, v) => s + v, 0) / peaks.length) : 0;
+    b.avgContextTokens = b.contextRequests ? Math.round(b.contextTokensSum / b.contextRequests) : 0;
+  }
   if (report === 'session') {
     for (const b of list) b.title = data.titles.get(b.key) ?? null;
     list.sort((a, b) => (a.lastActivity < b.lastActivity ? -1 : 1));
@@ -193,7 +213,20 @@ export function ranked(map, valueOf = (v) => v) {
 
 /** Plain-JSON form of a bucket. */
 export function toJSON(bucket) {
-  const { sessions, projects, unpricedModels, models, agents, tools, mcpServers, skills, commands, ...rest } = bucket;
+  const {
+    sessions,
+    projects,
+    unpricedModels,
+    models,
+    agents,
+    tools,
+    mcpServers,
+    skills,
+    commands,
+    sessionPeaks,
+    contextTokensSum,
+    ...rest
+  } = bucket;
   return {
     ...rest,
     sessionCount: sessions.size,

@@ -8,6 +8,7 @@ import { ranked, MAIN_AGENT } from './aggregate.mjs';
 
 export const money = (v) => ({ kind: 'usd', v: v || 0 });
 export const share = (part, whole) => ({ kind: 'pct', v: whole ? part / whole : null });
+export const average = (total, count) => ({ kind: 'avg', v: count ? total / count : null });
 
 const right = (title) => ({ title, align: 'right' });
 const left = (title, maxWidth) => ({ title, align: 'left', maxWidth });
@@ -39,6 +40,13 @@ function tokenCells(b, { compact, showCost }) {
   return cells;
 }
 
+// One session: its peak and average request. Several sessions: the largest
+// peak, and the session peaks averaged.
+const contextColumns = (perSession) =>
+  perSession ? [right('Max Context'), right('Avg Context')] : [right('Max Context'), right('Avg Max Context')];
+const contextCells = (b, perSession) =>
+  perSession ? [b.maxContextTokens, b.avgContextTokens] : [b.maxContextTokens, b.avgSessionMaxContextTokens];
+
 const COUNT_COLUMNS = [right('Tools'), right('Skills'), right('Cmds'), right('Agents')];
 const countCells = (b) => [b.toolCalls, b.skillCalls, b.commandCount, b.subagentLaunches];
 
@@ -65,17 +73,30 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   const lead = isSession
     ? [left('Session', 36), left('Project', 30), left('Last Activity')]
     : [left(PERIOD[report].title, report === 'project' ? 40 : undefined)];
-  const columns = [...lead, left('Models', 28), ...tokenColumns(opts), ...COUNT_COLUMNS];
+  // A session row is always one session, so the per-session columns only make
+  // sense for the other reports. Per Session is filled on breakdown sub-rows.
+  const sessionColumns = isSession ? [] : [right('Sessions'), ...(breakdown ? [right('Per Session')] : [])];
+  const sessionCells = (b) => (isSession ? [] : [b.sessions.size, ...(breakdown ? [''] : [])]);
+  const columns = [
+    ...lead,
+    left('Models', 28),
+    ...tokenColumns(opts),
+    ...contextColumns(isSession),
+    ...sessionColumns,
+    ...COUNT_COLUMNS,
+  ];
   const blankLead = lead.map(() => '');
-  const emptyTokens = tokenColumns(opts).map(() => '');
+  const emptyTokens = [...tokenColumns(opts), ...contextColumns(isSession)].map(() => '');
 
-  // Sub-row: label in the first column, count under Tools / Skills / Cmds / Agents.
-  const subRow = (label, count, col) => {
+  // Sub-row: label in the first column, count under Tools / Skills / Cmds / Agents,
+  // and the count averaged over the row's sessions under Per Session.
+  const subRow = (b, label, count, col) => {
     const counts = COUNT_COLUMNS.map(() => '');
     counts[col] = count;
     const subLead = [...blankLead];
     subLead[0] = label;
-    return { cells: [...subLead, '', ...emptyTokens, ...counts], style: 'sub' };
+    const perSession = isSession ? [] : ['', average(count, b.sessions.size)];
+    return { cells: [...subLead, '', ...emptyTokens, ...perSession, ...counts], style: 'sub' };
   };
 
   const rows = [];
@@ -84,23 +105,42 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
     const leadCells = isSession
       ? [b.title ?? b.key.slice(0, 8), [...b.projects][0] ?? '', localTime(b.lastActivity, timeZone)]
       : [b.key];
-    rows.push({ cells: [...leadCells, models.join(', '), ...tokenCells(b, opts), ...countCells(b)] });
+    rows.push({
+      cells: [
+        ...leadCells,
+        models.join(', '),
+        ...tokenCells(b, opts),
+        ...contextCells(b, isSession),
+        ...sessionCells(b),
+        ...countCells(b),
+      ],
+    });
 
     if (breakdown) {
       const limit = top > 0 ? top : Infinity;
-      for (const [name, count] of ranked(b.tools).slice(0, limit)) rows.push(subRow(`tool ${name}`, count, 0));
+      for (const [name, count] of ranked(b.tools).slice(0, limit)) rows.push(subRow(b, `tool ${name}`, count, 0));
       for (const [name, s] of ranked(b.skills, (s) => s.model + s.user).slice(0, limit))
-        rows.push(subRow(`skill ${name}`, s.model + s.user, 1));
-      for (const [name, count] of ranked(b.commands).slice(0, limit)) rows.push(subRow(`cmd ${name}`, count, 2));
+        rows.push(subRow(b, `skill ${name}`, s.model + s.user, 1));
+      for (const [name, count] of ranked(b.commands).slice(0, limit)) rows.push(subRow(b, `cmd ${name}`, count, 2));
       const launched = [...b.agents].filter(([, a]) => a.launches > 0);
       for (const [name, a] of launched.sort((x, y) => y[1].launches - x[1].launches).slice(0, limit))
-        rows.push(subRow(`agent ${name}`, a.launches, 3));
+        rows.push(subRow(b, `agent ${name}`, a.launches, 3));
     }
   }
 
   const totalLead = [...blankLead];
   totalLead[0] = 'Total';
-  rows.push({ cells: [...totalLead, '', ...tokenCells(totals, opts), ...countCells(totals)], style: 'total' });
+  rows.push({
+    cells: [
+      ...totalLead,
+      '',
+      ...tokenCells(totals, opts),
+      ...contextCells(totals, isSession),
+      ...sessionCells(totals),
+      ...countCells(totals),
+    ],
+    style: 'total',
+  });
 
   return {
     title: `Claude Code ${PERIOD[report].name} usage${rangeText(opts)}`,
@@ -113,11 +153,19 @@ export function buildSummary({ totals }, opts) {
   const { top, showCost } = opts;
   const sections = [
     {
-      columns: [...tokenColumns(opts), right('Requests'), right('Sessions'), right('Projects'), ...COUNT_COLUMNS],
+      columns: [
+        ...tokenColumns(opts),
+        ...contextColumns(false),
+        right('Requests'),
+        right('Sessions'),
+        right('Projects'),
+        ...COUNT_COLUMNS,
+      ],
       rows: [
         {
           cells: [
             ...tokenCells(totals, opts),
+            ...contextCells(totals, false),
             totals.requests,
             totals.sessions.size,
             totals.projects.size,

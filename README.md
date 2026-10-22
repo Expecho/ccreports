@@ -20,6 +20,21 @@ node bin/ccreports.mjs project -p agent42
 
 Or install it globally with `npm link` and run `ccreports`.
 
+Period reports (daily/weekly/monthly/project) include a **Sessions** column:
+the sessions active in that period. A session that spans two days counts in
+both, so rows can add up to more than the total. With `--breakdown`, a
+**Per Session** column gives each tool / skill / command / agent count divided
+by the row's sessions.
+
+**Context size** is the full prompt of a request: input + cache write + cache
+read tokens (output excluded). Only main-conversation requests count, since
+subagents run in their own context window.
+
+| Report | Max Context | Avg column |
+|---|---|---|
+| `session` | the session's peak | **Avg Context**: its average request |
+| others + summary | the largest peak of any session | **Avg Max Context**: session peaks averaged |
+
 ### Output formats
 
 | Format | Notes |

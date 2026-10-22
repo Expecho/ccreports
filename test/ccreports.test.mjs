@@ -6,6 +6,7 @@ import path from 'node:path';
 import { loadRecords, normalizeSkillName } from '../src/loader.mjs';
 import { aggregate, parseDateArg, toJSON, MAIN_AGENT } from '../src/aggregate.mjs';
 import { createPricer } from '../src/pricing.mjs';
+import { buildPeriodReport } from '../src/report.mjs';
 
 const base = { sessionId: 's1', cwd: '/work/app' };
 const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000 };
@@ -107,6 +108,57 @@ test('aggregates daily with filters', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('period report shows sessions and per-session averages on breakdown rows', async () => {
+  const root = await fixture();
+  try {
+    const data = await loadRecords({ dirs: [root] });
+    const result = aggregate(data, { report: 'monthly', timeZone: 'UTC' });
+    const { columns, rows } = buildPeriodReport('monthly', result, { breakdown: true, top: 0 }).sections[0];
+    const col = (title) => columns.findIndex((c) => c.title === title);
+    assert.equal(rows[0].cells[col('Sessions')], 1);
+    const bash = rows.find((r) => r.cells[0] === 'tool Bash');
+    assert.deepEqual(bash.cells[col('Per Session')], { kind: 'avg', v: 1 });
+
+    const plain = buildPeriodReport('monthly', result, {}).sections[0];
+    assert.equal(plain.columns.some((c) => c.title === 'Per Session'), false);
+    const session = buildPeriodReport('session', aggregate(data, { report: 'session' }), { breakdown: true }).sections[0];
+    assert.equal(session.columns.some((c) => c.title === 'Sessions' || c.title === 'Per Session'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('context size: per-session peak, averages, subagents excluded', () => {
+  const req = (sessionId, ctx, agent = null) => ({
+    timestamp: '2026-10-01T10:00:00Z',
+    sessionId,
+    project: '/p',
+    agent,
+    model: 'm',
+    inputTokens: 0,
+    outputTokens: 50, // output is not part of the context
+    cacheCreationTokens: 0,
+    cacheReadTokens: ctx,
+  });
+  const data = {
+    usage: [req('a', 100), req('a', 300), req('b', 500), req('b', 9999, 'Explore')],
+    tools: [],
+    skills: [],
+    commands: [],
+    titles: new Map(),
+  };
+  const { totals } = aggregate(data, { timeZone: 'UTC' });
+  assert.equal(totals.maxContextTokens, 500);
+  assert.equal(totals.avgSessionMaxContextTokens, 400); // (300 + 500) / 2
+  assert.equal(totals.avgContextTokens, 300); // (100 + 300 + 500) / 3
+
+  const sessions = aggregate(data, { report: 'session', timeZone: 'UTC' }).buckets.map(toJSON);
+  const a = sessions.find((s) => s.key === 'a');
+  assert.equal(a.maxContextTokens, 300);
+  assert.equal(a.avgContextTokens, 200);
+  assert.equal('sessionPeaks' in a, false);
 });
 
 test('attributes tokens and launches to subagent types', async () => {

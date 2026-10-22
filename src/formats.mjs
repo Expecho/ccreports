@@ -12,6 +12,10 @@ function cellText(cell, { csv = false } = {}) {
       ? cell.v.toFixed(4)
       : `$${cell.v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
+  if (cell.kind === 'avg') {
+    if (cell.v == null) return '';
+    return csv ? cell.v.toFixed(2) : cell.v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  }
   if (cell.kind === 'pct') {
     if (cell.v == null) return csv ? '' : '-';
     return csv ? (cell.v * 100).toFixed(2) : `${(cell.v * 100).toFixed(1)}%`;
@@ -174,7 +178,7 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
-main { max-width:1200px; margin:0 auto; padding:24px 16px 48px; }
+main { padding:24px 16px 48px; }
 h1 { font-size:22px; margin:0 0 4px; }
 .meta { color:var(--muted); margin:0 0 20px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 16px; }
