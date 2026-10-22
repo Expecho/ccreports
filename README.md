@@ -20,13 +20,33 @@ node bin/ccreports.mjs project -p agent42
 
 Or install it globally with `npm link` and run `ccreports`.
 
+### Output formats
+
+| Format | Notes |
+|---|---|
+| `table` | Box-drawn terminal tables. Colors only on a TTY; cache columns hidden below 120 columns or with `--compact`. |
+| `json` | Every bucket with all tools, MCP servers, skills, commands, models and subagent types (not limited by `--top`). |
+| `markdown` | GitHub-flavored tables, one `##` heading per summary section; breakdown sub-rows included. |
+| `csv` | Raw numbers (no separators, `$` or `%`; cost to 4 decimals). The summary is several tables separated by blank lines; breakdown sub-rows are left out. |
+| `html` | Self-contained page (no external assets), light/dark aware, share columns drawn as bars, sortable columns. |
+
+```sh
+node bin/ccreports.mjs -s 20261001 -f html -o usage.html
+node bin/ccreports.mjs monthly -f csv -o monthly.csv
+node bin/ccreports.mjs weekly -b -f md >> REPORT.md
+```
+
+Warnings (unpriced models, built-in prices) go to stderr, so redirected output stays clean.
+
 | Option | |
 |---|---|
 | `-s, --since` / `-u, --until` | Date range, `YYYYMMDD` or `YYYY-MM-DD` (inclusive) |
 | `-p, --project <text>` | Filter on project path (case-insensitive substring) |
 | `-b, --breakdown` | Per-row tool / skill / command sub-rows |
 | `-n, --top <n>` | Rows per ranked list (`0` = all) |
-| `-j, --json` | JSON output |
+| `-f, --format <fmt>` | `table` (default), `json`, `csv`, `markdown` / `md`, `html` |
+| `-j, --json` | Same as `--format json` |
+| `-o, --output <file>` | Write to a file instead of stdout |
 | `--order asc\|desc` | Row order |
 | `--timezone <tz>` | Timezone for date grouping |
 | `--no-cost` | Skip cost estimates |
