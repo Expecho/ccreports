@@ -1,0 +1,187 @@
+// Reads Claude Code session transcripts (~/.claude/projects/**/*.jsonl) and
+// extracts normalized usage, tool, skill and slash-command records.
+//
+// The transcript format is undocumented and changes between versions, so every
+// field access here is defensive: unknown line types are ignored, missing fields
+// fall back to sensible defaults.
+
+import { createReadStream } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
+import path from 'node:path';
+
+const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
+const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
+// "Task" is the tool's name in older Claude Code versions.
+const AGENT_TOOLS = new Set(['Agent', 'Task']);
+
+async function readAgentType(transcript) {
+  try {
+    const meta = JSON.parse(await readFile(transcript.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+    return meta.agentType || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** Directories that may hold a `projects` folder, honoring CLAUDE_CONFIG_DIR (comma-separated). */
+export function defaultProjectDirs() {
+  const env = process.env.CLAUDE_CONFIG_DIR;
+  const roots = env
+    ? env.split(',').map((s) => s.trim()).filter(Boolean)
+    : [path.join(homedir(), '.config', 'claude'), path.join(homedir(), '.claude')];
+  return roots.map((root) => path.join(root, 'projects'));
+}
+
+/**
+ * Skill names can carry a directory scope, e.g.
+ * ".claude/worktrees/feature-x:execute-plan" -> "execute-plan".
+ * Plugin prefixes ("anthropic-skills:docs") are kept.
+ */
+export function normalizeSkillName(name) {
+  const n = String(name ?? '').trim().replace(/^\//, '');
+  const i = n.lastIndexOf(':');
+  if (i > 0 && /[\\/]/.test(n.slice(0, i))) return n.slice(i + 1);
+  return n;
+}
+
+async function listTranscripts(dirs, { includeSubagents }) {
+  const files = [];
+  for (const dir of dirs) {
+    try {
+      if (!(await stat(dir)).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const entries = await readdir(dir, { recursive: true });
+    for (const rel of entries) {
+      if (!rel.endsWith('.jsonl')) continue;
+      const isSubagent = rel.split(/[\\/]/).includes('subagents');
+      if (isSubagent && !includeSubagents) continue;
+      files.push({ file: path.join(dir, rel), projectDir: rel.split(/[\\/]/)[0], isSubagent });
+    }
+  }
+  return files;
+}
+
+function textOf(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join('\n');
+}
+
+/**
+ * Load all records. Records are deduplicated globally because resumed and
+ * forked sessions copy earlier history into new files, and one API response is
+ * written as several lines (one per content block) sharing the same usage.
+ */
+export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagents = true } = {}) {
+  const usage = new Map(); // `${message.id}:${requestId}` -> record
+  const tools = new Map(); // tool_use id -> record
+  const skills = new Map(); // tool_use id | user-message uuid -> record
+  const commands = new Map(); // user-message uuid -> record
+  const titles = new Map(); // sessionId -> ai title
+
+  const files = await listTranscripts(dirs, { includeSubagents });
+
+  for (const { file, projectDir, isSubagent } of files) {
+    let pendingCommand = null;
+    // Records from a subagent transcript are tagged with its agent type
+    // (from the sibling .meta.json); main-session records get null.
+    const agent = isSubagent ? await readAgentType(file) : null;
+    const rl = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      // Cheap prefilter: skip the (often large) line types we never use.
+      if (
+        !line.includes('"type":"assistant"') &&
+        !line.includes('"type":"user"') &&
+        !line.includes('"type":"ai-title"')
+      ) {
+        continue;
+      }
+      let d;
+      try {
+        d = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (d.type === 'ai-title') {
+        if (d.sessionId && d.aiTitle) titles.set(d.sessionId, d.aiTitle);
+        continue;
+      }
+
+      const base = {
+        timestamp: d.timestamp,
+        sessionId: d.sessionId ?? d.session_id ?? path.basename(file, '.jsonl'),
+        project: d.cwd || projectDir,
+        agent,
+      };
+      if (!base.timestamp) continue;
+
+      if (d.type === 'assistant') {
+        const m = d.message ?? {};
+        const u = m.usage;
+        if (u && m.model !== '<synthetic>') {
+          const key = m.id ? `${m.id}:${d.requestId ?? ''}` : d.uuid;
+          // Later lines of the same response carry the final usage, so overwrite.
+          usage.set(key, {
+            ...base,
+            model: m.model ?? 'unknown',
+            inputTokens: u.input_tokens ?? 0,
+            outputTokens: u.output_tokens ?? 0,
+            cacheCreationTokens: u.cache_creation_input_tokens ?? 0,
+            cacheCreation1hTokens: u.cache_creation?.ephemeral_1h_input_tokens ?? 0,
+            cacheReadTokens: u.cache_read_input_tokens ?? 0,
+          });
+        }
+        for (const c of Array.isArray(m.content) ? m.content : []) {
+          if (!c || (c.type !== 'tool_use' && c.type !== 'server_tool_use') || !c.name) continue;
+          const id = c.id ?? `${d.uuid}:${c.name}`;
+          const tool = { ...base, name: c.name };
+          if (AGENT_TOOLS.has(c.name)) tool.subagentType = c.input?.subagent_type || 'general-purpose';
+          tools.set(id, tool);
+          if (c.name === 'Skill' && c.input?.skill) {
+            skills.set(id, { ...base, name: normalizeSkillName(c.input.skill), source: 'model' });
+          }
+        }
+        continue;
+      }
+
+      // type === 'user'
+      const text = textOf(d.message?.content);
+      if (pendingCommand) {
+        // A slash command that maps to a skill is followed by the skill's content.
+        if (text.startsWith(SKILL_CONTENT_PREFIX)) {
+          skills.set(d.uuid ?? `${pendingCommand.id}:skill`, {
+            ...base,
+            name: normalizeSkillName(pendingCommand.name),
+            source: 'user',
+          });
+        }
+        pendingCommand = null;
+      }
+      const match = COMMAND_RE.exec(text);
+      if (match) {
+        const name = '/' + normalizeSkillName(match[1]);
+        const id = d.uuid ?? `${file}:${base.timestamp}`;
+        commands.set(id, { ...base, name });
+        pendingCommand = { id, name };
+      }
+    }
+  }
+
+  return {
+    files: files.length,
+    usage: [...usage.values()],
+    tools: [...tools.values()],
+    skills: [...skills.values()],
+    commands: [...commands.values()],
+    titles,
+  };
+}

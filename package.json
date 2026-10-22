@@ -1,0 +1,21 @@
+{
+  "name": "ccreports",
+  "version": "0.1.0",
+  "description": "Report Claude Code tool, skill, slash-command and token usage from local session logs",
+  "type": "module",
+  "bin": {
+    "ccreports": "bin/ccreports.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "scripts": {
+    "start": "node bin/ccreports.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
