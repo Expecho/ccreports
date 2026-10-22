@@ -172,7 +172,8 @@ export function createPricer(table) {
 
     // A Haiku 5.5 request over the threshold pays the higher prices for all of
     // its tokens; the prompt length counts cache reads and writes too.
-    const prompt = rec.inputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
+    // (promptTokens overrides it for records that sum several requests.)
+    const prompt = rec.promptTokens ?? rec.inputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
     let rates = base.longContext && prompt > base.longContext.threshold ? base.longContext : base;
 
     // Fast mode replaces input/output prices; cache multipliers apply on top.

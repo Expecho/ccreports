@@ -97,9 +97,18 @@ test('aggregates daily with filters', async () => {
     const [d1, d2] = daily.buckets.map(toJSON);
     assert.equal(d1.totalTokens, 1115);
     assert.equal(d1.toolCalls, 1);
-    assert.deepEqual(d1.skills, { plan: { model: 0, user: 1, total: 1 } });
+    const plan = d1.skills.plan;
+    assert.deepEqual({ model: plan.model, user: plan.user, total: plan.total }, { model: 0, user: 1, total: 1 });
+    // Typed skill: its content enters the next request (cache write) and is re-read once after.
+    assert.ok(plan.cacheWriteTokens > 0);
+    assert.equal(plan.cacheReadTokens, plan.cacheWriteTokens);
+    assert.equal(plan.outputTokens, 0);
+    assert.equal(plan.tokens, plan.cacheWriteTokens + plan.cacheReadTokens);
     assert.equal(d2.toolCalls, 4);
-    assert.deepEqual(d2.mcpServers, { github: 1 });
+    assert.equal(d2.mcpServers.github.calls, 1);
+    assert.equal(typeof d2.mcpServers.github.tokens, 'number');
+    assert.equal(d2.tools.Bash, undefined); // Bash ran on day 1
+    assert.equal(d1.tools.Bash.calls, 1);
     assert.equal(toJSON(daily.totals).totalTokens, 3 * 1115);
 
     const filtered = aggregate(data, { report: 'summary', since: '2026-10-02', timeZone: 'UTC' });
@@ -168,7 +177,17 @@ test('attributes tokens and launches to subagent types', async () => {
     const { totals } = aggregate(data, { timeZone: 'UTC' });
     const agents = toJSON(totals).agents;
     assert.equal(totals.subagentLaunches, 1);
-    assert.deepEqual(agents.Explore, { launches: 1, requests: 1, toolCalls: 1, totalTokens: 1115, costUSD: 0 });
+    assert.deepEqual(agents.Explore, {
+      launches: 1,
+      requests: 1,
+      toolCalls: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationTokens: 100,
+      cacheReadTokens: 1000,
+      totalTokens: 1115,
+      costUSD: 0,
+    });
     assert.equal(agents[MAIN_AGENT].requests, 2);
     assert.equal(agents[MAIN_AGENT].toolCalls, 4);
   } finally {

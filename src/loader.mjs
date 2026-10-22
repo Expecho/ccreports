@@ -10,6 +10,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
 
 const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
 const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
@@ -85,6 +86,8 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const skills = new Map(); // tool_use id | user-message uuid -> record
   const commands = new Map(); // user-message uuid -> record
   const titles = new Map(); // sessionId -> ai title
+  const calibration = createCalibration();
+  const attributed = []; // token-attribution items from every file
 
   const files = await listTranscripts(dirs, { includeSubagents });
 
@@ -93,6 +96,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     // Records from a subagent transcript are tagged with its agent type
     // (from the sibling .meta.json); main-session records get null.
     const agent = isSubagent ? await readAgentType(file) : null;
+    const attribution = new FileAttribution(calibration);
     const rl = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
 
     for await (const line of rl) {
@@ -100,7 +104,8 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       if (
         !line.includes('"type":"assistant"') &&
         !line.includes('"type":"user"') &&
-        !line.includes('"type":"ai-title"')
+        !line.includes('"type":"ai-title"') &&
+        !line.includes('"subtype":"compact_boundary"')
       ) {
         continue;
       }
@@ -115,6 +120,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         if (d.sessionId && d.aiTitle) titles.set(d.sessionId, d.aiTitle);
         continue;
       }
+      if (d.type === 'system') {
+        if (d.subtype === 'compact_boundary') attribution.compact();
+        continue;
+      }
 
       const base = {
         timestamp: d.timestamp,
@@ -127,8 +136,15 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       if (d.type === 'assistant') {
         const m = d.message ?? {};
         const u = m.usage;
+        const key = m.id ? `${m.id}:${d.requestId ?? ''}` : d.uuid;
         if (u && m.model !== '<synthetic>') {
-          const key = m.id ? `${m.id}:${d.requestId ?? ''}` : d.uuid;
+          const cacheCreation = u.cache_creation_input_tokens ?? 0;
+          attribution.response(key, {
+            context: (u.input_tokens ?? 0) + cacheCreation + (u.cache_read_input_tokens ?? 0),
+            output: u.output_tokens ?? 0,
+            model: m.model ?? 'unknown',
+            cache1hShare: cacheCreation ? (u.cache_creation?.ephemeral_1h_input_tokens ?? 0) / cacheCreation : 0,
+          });
           // Later lines of the same response carry the final usage, so overwrite.
           usage.set(key, {
             ...base,
@@ -150,6 +166,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
           const tool = { ...base, name: c.name };
           if (AGENT_TOOLS.has(c.name)) tool.subagentType = c.input?.subagent_type || 'general-purpose';
           tools.set(id, tool);
+          attribution.toolUse(key, id, JSON.stringify(c.input ?? {}).length, c.name === 'Skill');
           if (c.name === 'Skill' && c.input?.skill) {
             skills.set(id, { ...base, name: normalizeSkillName(c.input.skill), source: 'model' });
           }
@@ -158,18 +175,25 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       }
 
       // type === 'user'
-      const text = textOf(d.message?.content);
+      const content = d.message?.content;
+      const text = textOf(content);
+      for (const block of Array.isArray(content) ? content : []) {
+        if (block?.type === 'tool_result') attribution.toolResult(block.tool_use_id, textOf(block.content).length);
+      }
+      const isSkillContent = text.startsWith(SKILL_CONTENT_PREFIX);
       if (pendingCommand) {
         // A slash command that maps to a skill is followed by the skill's content.
-        if (text.startsWith(SKILL_CONTENT_PREFIX)) {
-          skills.set(d.uuid ?? `${pendingCommand.id}:skill`, {
-            ...base,
-            name: normalizeSkillName(pendingCommand.name),
-            source: 'user',
-          });
+        if (isSkillContent) {
+          const id = d.uuid ?? `${pendingCommand.id}:skill`;
+          skills.set(id, { ...base, name: normalizeSkillName(pendingCommand.name), source: 'user' });
+          attribution.skillContent(text.length, id);
         }
         pendingCommand = null;
+      } else if (isSkillContent) {
+        attribution.skillContent(text.length); // loaded by a Skill tool call
       }
+      // Text from the user (not tool results, skill content or injected meta) ends a tool loop.
+      if (text && !isSkillContent && !d.isMeta) attribution.human();
       const match = COMMAND_RE.exec(text);
       if (match) {
         const name = '/' + normalizeSkillName(match[1]);
@@ -178,9 +202,24 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         pendingCommand = { id, name };
       }
     }
+    attributed.push(...attribution.finish());
+  }
+
+  // Resumed sessions repeat earlier history in a new file; per record keep the
+  // copy that saw the most later requests.
+  resolveTokens(attributed, charsPerToken(calibration));
+  const best = new Map();
+  for (const item of attributed) {
+    if (!best.has(item.id) || item.tokens.total > best.get(item.id).tokens.total) best.set(item.id, item);
+  }
+  for (const [id, item] of best) {
+    const record = tools.get(id) ?? skills.get(id);
+    if (record) record.tokens = item.tokens;
+    if (tools.has(id) && skills.has(id)) skills.get(id).tokens = item.tokens; // model-invoked skill = its Skill call
   }
 
   return {
+    charsPerToken: charsPerToken(calibration),
     files: files.length,
     usage: [...usage.values()],
     tools: [...tools.values()],

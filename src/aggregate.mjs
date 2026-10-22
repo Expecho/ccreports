@@ -78,6 +78,10 @@ function newBucket(key) {
     tools: new Map(), // name -> count
     mcpServers: new Map(), // server -> count
     skills: new Map(), // name -> { model, user }
+    // Estimated tokens / cost attributed to each item (see src/attribution.mjs).
+    toolTokens: new Map(), // name -> { tokens, costUSD }
+    mcpServerTokens: new Map(), // server -> { tokens, costUSD }
+    skillTokens: new Map(), // name -> { tokens, costUSD }
     commands: new Map(), // name -> count
   };
 }
@@ -87,13 +91,52 @@ export const MAIN_AGENT = '(main session)';
 function agentEntry(bucket, type) {
   const key = type ?? MAIN_AGENT;
   if (!bucket.agents.has(key)) {
-    bucket.agents.set(key, { launches: 0, requests: 0, toolCalls: 0, totalTokens: 0, costUSD: 0 });
+    bucket.agents.set(key, {
+      launches: 0,
+      requests: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      costUSD: 0,
+    });
   }
   return bucket.agents.get(key);
 }
 
 function inc(map, key, by = 1) {
   map.set(key, (map.get(key) ?? 0) + by);
+}
+
+/** Adds an attributed item's tokens (src/attribution.mjs) to a per-name entry. */
+function addTokens(map, key, t, costUSD) {
+  const entry = map.get(key) ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
+  if (t) {
+    entry.tokens += t.total;
+    entry.outputTokens += t.outputTokens;
+    entry.cacheWriteTokens += t.cacheWriteTokens;
+    entry.cacheReadTokens += t.cacheReadTokens;
+  }
+  entry.costUSD += costUSD;
+  map.set(key, entry);
+}
+
+/** Prices an attributed item: tool input as output, then cache writes and re-reads. */
+function attributedCost(t, pricer) {
+  if (!pricer || !t.model) return 0;
+  return (
+    pricer({
+      model: t.model,
+      inputTokens: 0,
+      outputTokens: t.outputTokens,
+      cacheCreationTokens: t.cacheWriteTokens,
+      cacheCreation1hTokens: Math.round(t.cacheWriteTokens * t.cache1hShare),
+      cacheReadTokens: t.cacheReadTokens,
+      promptTokens: t.promptTokens,
+    }) ?? 0
+  );
 }
 
 function touch(bucket, rec) {
@@ -154,16 +197,28 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
       b.models.set(rec.model, m);
       const a = agentEntry(b, rec.agent);
       a.requests += 1;
+      a.inputTokens += rec.inputTokens;
+      a.outputTokens += rec.outputTokens;
+      a.cacheCreationTokens += rec.cacheCreationTokens;
+      a.cacheReadTokens += rec.cacheReadTokens;
       a.totalTokens += total;
       a.costUSD += cost;
     }
   }
 
   for (const rec of data.tools) {
-    for (const b of accept(rec) ?? []) {
+    const buckets = accept(rec);
+    if (!buckets) continue;
+    const server = rec.name.startsWith('mcp__') ? rec.name.split('__')[1] || 'unknown' : null;
+    const cost = rec.tokens ? attributedCost(rec.tokens, pricer) : 0;
+    for (const b of buckets) {
       b.toolCalls += 1;
       inc(b.tools, rec.name);
-      if (rec.name.startsWith('mcp__')) inc(b.mcpServers, rec.name.split('__')[1] || 'unknown');
+      addTokens(b.toolTokens, rec.name, rec.tokens, cost);
+      if (server) {
+        inc(b.mcpServers, server);
+        addTokens(b.mcpServerTokens, server, rec.tokens, cost);
+      }
       agentEntry(b, rec.agent).toolCalls += 1;
       if (rec.subagentType) {
         b.subagentLaunches += 1;
@@ -173,7 +228,11 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
   }
 
   for (const rec of data.skills) {
-    for (const b of accept(rec) ?? []) {
+    const buckets = accept(rec);
+    if (!buckets) continue;
+    const cost = rec.tokens ? attributedCost(rec.tokens, pricer) : 0;
+    for (const b of buckets) {
+      addTokens(b.skillTokens, rec.name, rec.tokens, cost);
       b.skillCalls += 1;
       const s = b.skills.get(rec.name) ?? { model: 0, user: 0 };
       s[rec.source] += 1;
@@ -225,8 +284,13 @@ export function toJSON(bucket) {
     commands,
     sessionPeaks,
     contextTokensSum,
+    toolTokens,
+    mcpServerTokens,
+    skillTokens,
     ...rest
   } = bucket;
+  const withTokens = (counts, tokens, key) =>
+    Object.fromEntries(ranked(counts).map(([k, v]) => [k, { [key]: v, ...tokens.get(k) }]));
   return {
     ...rest,
     sessionCount: sessions.size,
@@ -234,10 +298,14 @@ export function toJSON(bucket) {
     unpricedModels: [...unpricedModels].sort(),
     models: Object.fromEntries(ranked(models, (m) => m.totalTokens)),
     agents: Object.fromEntries(ranked(agents, (a) => a.totalTokens)),
-    tools: Object.fromEntries(ranked(tools)),
-    mcpServers: Object.fromEntries(ranked(mcpServers)),
+    // tokens / costUSD: estimated attribution (see src/attribution.mjs).
+    tools: withTokens(tools, toolTokens, 'calls'),
+    mcpServers: withTokens(mcpServers, mcpServerTokens, 'calls'),
     skills: Object.fromEntries(
-      ranked(skills, (s) => s.model + s.user).map(([k, s]) => [k, { ...s, total: s.model + s.user }]),
+      ranked(skills, (s) => s.model + s.user).map(([k, s]) => [
+        k,
+        { ...s, total: s.model + s.user, ...skillTokens.get(k) },
+      ]),
     ),
     commands: Object.fromEntries(ranked(commands)),
   };

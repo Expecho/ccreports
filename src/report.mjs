@@ -6,7 +6,8 @@
 
 import { ranked, MAIN_AGENT } from './aggregate.mjs';
 
-export const money = (v) => ({ kind: 'usd', v: v || 0 });
+export const money = (v, { approx = false } = {}) => ({ kind: 'usd', v: v || 0, approx });
+export const approx = (v) => ({ kind: 'num', v: v || 0, approx: true });
 export const share = (part, whole) => ({ kind: 'pct', v: whole ? part / whole : null });
 export const average = (total, count) => ({ kind: 'avg', v: count ? total / count : null });
 
@@ -30,6 +31,46 @@ function tokenColumns({ compact, showCost }) {
     : [right('Input'), right('Output'), right('Cache Create'), right('Cache Read'), right('Total Tokens')];
   if (showCost) cols.push(right('Cost (USD)'));
   return cols;
+}
+
+// Token cells of a breakdown item, keyed by column. `allInput` (every input-side
+// token) is what the compact layout shows under Input.
+
+/** Attributed tool/skill tokens: estimates, shown with "~". Results always arrive via the cache, so Input stays empty. */
+function estimated(t) {
+  if (!t) return null;
+  return {
+    input: '',
+    output: approx(t.outputTokens),
+    cacheCreate: approx(t.cacheWriteTokens),
+    cacheRead: approx(t.cacheReadTokens),
+    allInput: approx(t.cacheWriteTokens + t.cacheReadTokens),
+    total: approx(t.tokens),
+    cost: money(t.costUSD, { approx: true }),
+  };
+}
+
+/** A subagent type's own requests: exact. */
+function exact(a) {
+  return {
+    input: a.inputTokens,
+    output: a.outputTokens,
+    cacheCreate: a.cacheCreationTokens,
+    cacheRead: a.cacheReadTokens,
+    allInput: a.inputTokens + a.cacheCreationTokens + a.cacheReadTokens,
+    total: a.totalTokens,
+    cost: money(a.costUSD),
+  };
+}
+
+function subTokenCells(u, { compact, showCost }) {
+  const cells = !u
+    ? (compact ? ['', '', ''] : ['', '', '', '', ''])
+    : compact
+      ? [u.allInput, u.output, u.total]
+      : [u.input, u.output, u.cacheCreate, u.cacheRead, u.total];
+  if (showCost) cells.push(u ? u.cost : '');
+  return cells;
 }
 
 function tokenCells(b, { compact, showCost }) {
@@ -86,17 +127,21 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
     ...COUNT_COLUMNS,
   ];
   const blankLead = lead.map(() => '');
-  const emptyTokens = [...tokenColumns(opts), ...contextColumns(isSession)].map(() => '');
+  const emptyContext = contextColumns(isSession).map(() => '');
 
-  // Sub-row: label in the first column, count under Tools / Skills / Cmds / Agents,
-  // and the count averaged over the row's sessions under Per Session.
-  const subRow = (b, label, count, col) => {
+  // Sub-row: label in the first column, the item's tokens and cost under Total
+  // Tokens / Cost, its count under Tools / Skills / Cmds / Agents, and the count
+  // averaged over the row's sessions under Per Session.
+  const subRow = (b, label, count, col, usage) => {
     const counts = COUNT_COLUMNS.map(() => '');
     counts[col] = count;
     const subLead = [...blankLead];
     subLead[0] = label;
     const perSession = isSession ? [] : ['', average(count, b.sessions.size)];
-    return { cells: [...subLead, '', ...emptyTokens, ...perSession, ...counts], style: 'sub' };
+    return {
+      cells: [...subLead, '', ...subTokenCells(usage, opts), ...emptyContext, ...perSession, ...counts],
+      style: 'sub',
+    };
   };
 
   const rows = [];
@@ -118,13 +163,15 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
 
     if (breakdown) {
       const limit = top > 0 ? top : Infinity;
-      for (const [name, count] of ranked(b.tools).slice(0, limit)) rows.push(subRow(b, `[tool] ${name}`, count, 0));
+      for (const [name, count] of ranked(b.tools).slice(0, limit))
+        rows.push(subRow(b, `[tool] ${name}`, count, 0, estimated(b.toolTokens.get(name))));
       for (const [name, s] of ranked(b.skills, (s) => s.model + s.user).slice(0, limit))
-        rows.push(subRow(b, `[skill] ${name}`, s.model + s.user, 1));
+        rows.push(subRow(b, `[skill] ${name}`, s.model + s.user, 1, estimated(b.skillTokens.get(name))));
       for (const [name, count] of ranked(b.commands).slice(0, limit)) rows.push(subRow(b, `[cmd] ${name}`, count, 2));
+      // Subagent tokens are exact: everything in that type's own transcripts.
       const launched = [...b.agents].filter(([, a]) => a.launches > 0);
       for (const [name, a] of launched.sort((x, y) => y[1].launches - x[1].launches).slice(0, limit))
-        rows.push(subRow(b, `[agent] ${name}`, a.launches, 3));
+        rows.push(subRow(b, `[agent] ${name}`, a.launches, 3, exact(a)));
     }
   }
 
@@ -185,22 +232,45 @@ export function buildSummary({ totals }, opts) {
   const costCol = showCost ? [right('Cost (USD)')] : [];
   const costCell = (v) => (showCost ? [money(v)] : []);
 
-  section('Tools', [left('Tool'), right('Calls'), right('Share')], ranked(totals.tools), ([name, count]) => [
-    name,
-    count,
-    share(count, totals.toolCalls),
-  ]);
+  // Estimated tokens and cost attributed to each tool / server / skill: input
+  // side (result in context + re-reads) and output (the input the model wrote).
+  const estCols = [
+    right('Input (est.)'),
+    right('Output (est.)'),
+    right('Tokens (est.)'),
+    ...(showCost ? [right('Cost (est.)')] : []),
+    right('Token share'),
+  ];
+  const estCells = (usage) => {
+    const u = usage ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
+    return [
+      approx(u.cacheWriteTokens + u.cacheReadTokens),
+      approx(u.outputTokens),
+      approx(u.tokens),
+      ...(showCost ? [money(u.costUSD, { approx: true })] : []),
+      share(u.tokens, totals.totalTokens),
+    ];
+  };
 
-  section('MCP servers', [left('Server'), right('Calls')], ranked(totals.mcpServers), ([name, count]) => [
-    name,
-    count,
-  ]);
+  section(
+    'Tools',
+    [left('Tool'), right('Calls'), right('Share'), ...estCols],
+    ranked(totals.tools),
+    ([name, count]) => [name, count, share(count, totals.toolCalls), ...estCells(totals.toolTokens.get(name))],
+  );
+
+  section(
+    'MCP servers',
+    [left('Server'), right('Calls'), ...estCols],
+    ranked(totals.mcpServers),
+    ([name, count]) => [name, count, ...estCells(totals.mcpServerTokens.get(name))],
+  );
 
   section(
     'Skills',
-    [left('Skill'), right('By model'), right('By user'), right('Total')],
+    [left('Skill'), right('By model'), right('By user'), right('Total'), ...estCols],
     ranked(totals.skills, (s) => s.model + s.user),
-    ([name, s]) => [name, s.model, s.user, s.model + s.user],
+    ([name, s]) => [name, s.model, s.user, s.model + s.user, ...estCells(totals.skillTokens.get(name))],
   );
 
   section('Slash commands', [left('Command'), right('Count')], ranked(totals.commands), ([name, count]) => [
@@ -217,6 +287,8 @@ export function buildSummary({ totals }, opts) {
         right('Launches'),
         right('Requests'),
         right('Tool calls'),
+        right('Input'),
+        right('Output'),
         right('Total Tokens'),
         ...costCol,
         right('Token share'),
@@ -227,6 +299,8 @@ export function buildSummary({ totals }, opts) {
         name === MAIN_AGENT ? '' : a.launches,
         a.requests,
         a.toolCalls,
+        a.inputTokens + a.cacheCreationTokens + a.cacheReadTokens,
+        a.outputTokens,
         a.totalTokens,
         ...costCell(a.costUSD),
         share(a.totalTokens, totals.totalTokens),

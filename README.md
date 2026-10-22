@@ -26,6 +26,33 @@ both, so rows can add up to more than the total. With `--breakdown`, a
 **Per Session** column gives each tool / skill / command / agent count divided
 by the row's sessions.
 
+**Tokens per tool, skill and subagent.** Breakdown sub-rows fill the token
+columns like their parent row: *Output* (the tool input the model wrote),
+*Cache Create* (the result entering the context), *Cache Read* (re-reads),
+*Total Tokens* and *Cost*; in `--compact` layout *Input* is all input-side
+tokens. Tool and skill rows leave the uncached *Input* column empty: results
+always arrive through the cache. The summary's Tools, MCP servers and Skills
+tables add *Input (est.)*, *Output (est.)*, *Tokens (est.)* and *Cost
+(est.)*; the Subagents table shows exact *Input* and *Output*. The logs record usage per request only, so
+for tools and skills this is reconstructed (shown with `~`):
+
+- the tool input the model wrote counts as output tokens;
+- the result is what it adds to the context of the next request. In a tool
+  loop that is measured: `context(next) − context(this) − output(this)`,
+  split over parallel calls by result length. When a human message or
+  compaction sits in between, or for a skill typed as a command, it is
+  estimated from the text length at a characters-per-token ratio calibrated
+  on the measured turns (about 2.2–2.4 in practice);
+- input and result are then re-sent with every later request of that
+  conversation until it ends or is compacted - these re-reads (cache reads)
+  are usually most of it;
+- cost prices the input as output tokens, the first inclusion as a cache
+  write and the re-reads as cache reads, at the model of the request.
+
+A model-invoked skill is its `Skill` call plus the skill content it loads.
+Subagent rows are exact: all tokens of that type's own transcripts. Items are
+counted in the period of the call, even when re-reads happen later.
+
 **Context size** is the full prompt of a request: input + cache write + cache
 read tokens (output excluded). Only main-conversation requests count, since
 subagents run in their own context window.

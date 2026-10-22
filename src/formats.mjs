@@ -7,10 +7,13 @@ export const FORMATS = ['table', 'json', 'csv', 'markdown', 'html'];
 function cellText(cell, { csv = false } = {}) {
   if (cell == null || cell === '') return '';
   if (typeof cell === 'number') return csv ? String(cell) : cell.toLocaleString('en-US');
+  // Estimates are prefixed with "~" for display; CSV keeps the plain number.
+  const mark = cell.approx && !csv ? '~' : '';
+  if (cell.kind === 'num') return csv ? String(Math.round(cell.v)) : mark + Math.round(cell.v).toLocaleString('en-US');
   if (cell.kind === 'usd') {
     return csv
       ? cell.v.toFixed(4)
-      : `$${cell.v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      : `${mark}$${cell.v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   if (cell.kind === 'avg') {
     if (cell.v == null) return '';
