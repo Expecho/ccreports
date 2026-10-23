@@ -1,6 +1,10 @@
 // Groups loaded records into report buckets (daily, weekly, monthly, session,
 // project or a single summary bucket).
 
+import { commandCategory } from './shell.mjs';
+
+const QUIET_CATEGORY = 'Change directory';
+
 export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption', 'recommendations'];
 
 export function dateFormatter(timeZone) {
@@ -83,6 +87,8 @@ function newBucket(key) {
     mcpServerTokens: new Map(), // server -> { tokens, costUSD }
     skillTokens: new Map(), // name -> { tokens, costUSD }
     commands: new Map(), // name -> count
+    shellCommands: new Map(), // 'Bash' | 'PowerShell' -> Map(program -> { calls, sessions: Set })
+    shellCategories: new Map(), // 'Bash' | 'PowerShell' -> Map(category -> { calls, sessions: Set })
     hookRuns: 0,
     hooks: new Map(), // command -> { events, runs, errors, blocked, durationMs, contextTokens }
   };
@@ -114,15 +120,20 @@ function inc(map, key, by = 1) {
 
 /** Adds an attributed item's tokens (src/attribution.mjs) to a per-name entry. */
 function addTokens(map, key, t, costUSD) {
-  const entry = map.get(key) ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
+  map.set(key, addUsage(map.get(key) ?? {}, t, costUSD));
+}
+
+/** Adds a share `f` of an attributed item's tokens and cost to `entry`. */
+function addUsage(entry, t, costUSD, f = 1) {
+  for (const k of ['tokens', 'outputTokens', 'cacheWriteTokens', 'cacheReadTokens', 'costUSD']) entry[k] ??= 0;
   if (t) {
-    entry.tokens += t.total;
-    entry.outputTokens += t.outputTokens;
-    entry.cacheWriteTokens += t.cacheWriteTokens;
-    entry.cacheReadTokens += t.cacheReadTokens;
+    entry.tokens += t.total * f;
+    entry.outputTokens += t.outputTokens * f;
+    entry.cacheWriteTokens += t.cacheWriteTokens * f;
+    entry.cacheReadTokens += t.cacheReadTokens * f;
   }
-  entry.costUSD += costUSD;
-  map.set(key, entry);
+  entry.costUSD += costUSD * f;
+  return entry;
 }
 
 /** Prices an attributed item: tool input as output, then cache writes and re-reads. */
@@ -231,6 +242,29 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
         addTokens(b.mcpServerTokens, server, rec.tokens, cost);
       }
       agentEntry(b, rec.agent).toolCalls += 1;
+      if (rec.shellCommands?.length) {
+        // A call's tokens are split evenly over its programs, and over its
+        // purposes, so neither double counts. A cd prints nothing: it only gets
+        // tokens when the call ran nothing else. A call counts once per purpose.
+        const programs = rec.shellCommands;
+        const categories = [...new Set(programs.map(commandCategory))];
+        const producing = programs.filter((p) => commandCategory(p) !== QUIET_CATEGORY);
+        for (const [map, keys, category] of [
+          [b.shellCommands, programs, commandCategory],
+          [b.shellCategories, categories, (c) => c],
+        ]) {
+          if (!map.has(rec.name)) map.set(rec.name, new Map());
+          const entries = map.get(rec.name);
+          const paid = producing.length ? keys.filter((k) => category(k) !== QUIET_CATEGORY) : keys;
+          for (const key of keys) {
+            const e = entries.get(key) ?? { calls: 0, sessions: new Set() };
+            e.calls += 1;
+            e.sessions.add(rec.sessionId);
+            addUsage(e, rec.tokens, cost, paid.includes(key) ? 1 / paid.length : 0);
+            entries.set(key, e);
+          }
+        }
+      }
       if (rec.subagentType) {
         b.subagentLaunches += 1;
         agentEntry(b, rec.subagentType).launches += 1;
@@ -298,6 +332,26 @@ export function ranked(map, valueOf = (v) => v) {
   return [...map.entries()].sort((a, b) => valueOf(b[1]) - valueOf(a[1]) || (a[0] < b[0] ? -1 : 1));
 }
 
+/** { Bash: { grep: { calls, sessions, tokens, ... } } } from shellCommands / shellCategories. */
+function shellJSON(shells, extra = () => ({})) {
+  return Object.fromEntries(
+    [...shells].map(([shell, entries]) => [
+      shell,
+      Object.fromEntries(
+        ranked(entries, (e) => e.calls).map(([k, { sessions, costUSD, ...e }]) => [
+          k,
+          {
+            ...extra(k),
+            ...Object.fromEntries(Object.entries(e).map(([f, v]) => [f, Math.round(v)])),
+            sessions: sessions.size,
+            costUSD,
+          },
+        ]),
+      ),
+    ]),
+  );
+}
+
 /** Plain-JSON form of a bucket. */
 export function toJSON(bucket) {
   const {
@@ -310,6 +364,8 @@ export function toJSON(bucket) {
     mcpServers,
     skills,
     commands,
+    shellCommands,
+    shellCategories,
     sessionPeaks,
     contextTokensSum,
     toolTokens,
@@ -337,6 +393,12 @@ export function toJSON(bucket) {
       ]),
     ),
     commands: Object.fromEntries(ranked(commands)),
+    // Programs run by Bash / PowerShell calls; a call running several counts for
+    // each. tokens / costUSD: the call's estimate, split evenly over its programs.
+    shellCommands: shellJSON(shellCommands, (k) => ({ category: commandCategory(k) })),
+    // The same calls grouped by purpose; a call counts once per category, its
+    // tokens split evenly over its categories.
+    shellCategories: shellJSON(shellCategories),
     // contextTokens: estimated, counted once as it enters the context.
     hooks: Object.fromEntries(ranked(hooks, (h) => h.runs).map(([k, h]) => [k, { ...h, events: [...h.events].sort() }])),
   };

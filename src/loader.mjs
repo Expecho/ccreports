@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
+import { SHELL_TOOLS, shellCommands } from './shell.mjs';
 
 const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
 const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
@@ -105,6 +106,12 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     return sessions.get(id);
   };
   const sessionStart = new Map(); // sessionId -> { rank, timestamp, cwd } of its earliest record
+  // PowerShell commands are case-insensitive: one name per command, the first spelling seen.
+  const psNames = new Map(); // lower-cased name -> spelling
+  const psName = (name) => {
+    if (!psNames.has(name.toLowerCase())) psNames.set(name.toLowerCase(), name);
+    return psNames.get(name.toLowerCase());
+  };
   const calibration = createCalibration();
   const attributed = []; // token-attribution items from every file
 
@@ -238,6 +245,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
             if (c.input?.run_in_background) tool.background = true;
           }
           if (c.input?.isolation === 'worktree' || c.name === 'EnterWorktree') tool.worktree = true;
+          if (SHELL_TOOLS.has(c.name) && typeof c.input?.command === 'string') {
+            const names = shellCommands(c.input.command, c.name);
+            tool.shellCommands = c.name === 'PowerShell' ? names.map(psName) : names;
+          }
           tools.set(id, tool);
           attribution.toolUse(key, id, JSON.stringify(c.input ?? {}).length, c.name === 'Skill');
           if (c.name === 'Skill' && c.input?.skill) {

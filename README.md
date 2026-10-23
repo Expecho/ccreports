@@ -49,6 +49,7 @@ Claude runs the bundled CLI (Node.js 20+ required) and explains the results.
 node bin/ccreports.mjs                 # summary: totals + ranked tools, MCP servers, skills, commands, hooks, models
 node bin/ccreports.mjs daily           # one row per day
 node bin/ccreports.mjs weekly -b       # per week, with top tools/skills/commands as sub-rows
+node bin/ccreports.mjs -x              # summary plus the programs run by Bash / PowerShell calls
 node bin/ccreports.mjs monthly --json
 node bin/ccreports.mjs session -s 20261020
 node bin/ccreports.mjs project -p agent42
@@ -182,6 +183,7 @@ byte order mark so Excel shows non-ASCII characters correctly.
 | `-s, --since` / `-u, --until` | Date range, `YYYYMMDD` or `YYYY-MM-DD` (inclusive) |
 | `-p, --project <text>` | Filter on project path (case-insensitive substring) |
 | `-b, --breakdown` | Per-row tool / skill / command sub-rows |
+| `-x, --shell` | Programs run by Bash / PowerShell calls, grouped by purpose: a table per shell in the summary, `[bash]` / `[powershell]` sub-rows in period reports |
 | `-a, --adoption` | Append the adoption assessment to the report |
 | `-r, --recommendations` | Append best-practice recommendations to the report |
 | `-n, --top <n>` | Rows per ranked list (`0` = all) |
@@ -212,6 +214,26 @@ byte order mark so Excel shows non-ASCII characters correctly.
     (`Base directory for this skill: …`).
 
   Directory scopes like `.claude/worktrees/x:plan` are normalized to `plan`.
+- **Shell commands** (`--shell`) – the programs a `Bash` or `PowerShell`
+  call ran: the first word of every pipeline stage, `&&` / `;` list element,
+  `$( … )` subshell and PowerShell script block. Quoted text, heredocs,
+  here-strings and comments are not split, so inline code (`python -c "…"`,
+  `cat <<EOF`) is not counted; nor are variables, keywords, PowerShell values
+  and members (`$x = …`, `.Count`, `[IO.File]::…`) or functions the command
+  defines itself. Paths are reduced to the program (`C:\…\git.exe` → `git`)
+  and PowerShell names are case-insensitive. A call running several programs
+  counts once for each. Reports group them by purpose (search & read files,
+  change directory, text & data processing, print output, files, Git &
+  GitHub, build / run / test, cloud & network, processes & system, other):
+  *Calls* counts a call once per purpose, so *Share* (of that tool's calls)
+  adds up to more than 100%. *Tokens (est.)* and *Cost (est.)* are the
+  call's estimate (see *Tokens per tool* above) split evenly over its
+  programs and over its purposes, so they add up to the tool's total instead
+  of double counting; a `cd` / `Set-Location` prints nothing and only gets
+  tokens when the call ran nothing else. The *Commands* column shows each
+  program's calls and `~tokens`. JSON output always includes `shellCommands`
+  (per program, with its category) and `shellCategories`, both with tokens
+  and cost.
 - **Slash commands** – user messages containing `<command-name>`, including
   built-ins like `/clear` and `/model`. A user-typed skill counts both as a
   command and as a skill.

@@ -1,10 +1,11 @@
 // Builds format-neutral report documents from aggregated buckets. A document is
 //   { title, sections: [{ title?, note?, columns, rows }] }
-// where a column is { title, align, maxWidth? } and a row is { cells, style? }
+// where a column is { title, align, maxWidth?, clip?, wrap? } and a row is { cells, style? }
 // (style 'total' or 'sub'). Cells are raw values - numbers, strings, money() or
 // share() - so each output format (src/formats.mjs) decides how to print them.
 
 import { ranked, MAIN_AGENT } from './aggregate.mjs';
+import { commandCategory, OTHER_CATEGORY } from './shell.mjs';
 
 export const money = (v, { approx = false } = {}) => ({ kind: 'usd', v: v || 0, approx });
 export const approx = (v) => ({ kind: 'num', v: v || 0, approx: true });
@@ -13,6 +14,32 @@ export const average = (total, count) => ({ kind: 'avg', v: count ? total / coun
 
 const right = (title) => ({ title, align: 'right' });
 const left = (title, maxWidth) => ({ title, align: 'left', maxWidth });
+// Long text: wraps in HTML, truncated in the terminal.
+// Paths: at most 40 characters in every display format, keeping the end.
+const path = (title) => ({ title, align: 'left', maxWidth: 40, clip: 'start' });
+const wrapped = (title) => ({ title, align: 'left', maxWidth: 100, wrap: true });
+
+/** Shell command categories by calls, Other last. */
+const shellCategoryRows = (categories) =>
+  ranked(categories, (c) => c.calls).sort((a, b) => (a[0] === OTHER_CATEGORY) - (b[0] === OTHER_CATEGORY));
+
+/** 1234 -> "1.2K", 45100000 -> "45M". */
+function shortNumber(n) {
+  for (const [div, unit] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) {
+    if (n >= div) return `${(n / div).toFixed(n >= div * 10 ? 0 : 1)}${unit}`;
+  }
+  return String(Math.round(n));
+}
+
+/** "grep 8,956 (~45M) · head 7,579 (~30M) · +4 more": a category's programs, most used first. */
+function categoryCommands(programs, category, limit, { counts = true } = {}) {
+  const list = ranked(programs ?? new Map(), (p) => p.calls).filter(([name]) => commandCategory(name) === category);
+  const shown = list
+    .slice(0, limit)
+    .map(([name, p]) => (counts ? `${name} ${p.calls.toLocaleString('en-US')} (~${shortNumber(p.tokens)})` : name));
+  if (list.length > limit) shown.push(`+${list.length - limit} more`);
+  return shown.join(counts ? ' · ' : ', ');
+}
 
 // sv-SE formats as "YYYY-MM-DD HH:mm".
 const localTime = (timestamp, timeZone) =>
@@ -109,15 +136,16 @@ const PERIOD = {
 
 /** daily / weekly / monthly / session / project report. */
 export function buildPeriodReport(report, { buckets, totals }, opts) {
-  const { breakdown, top, timeZone } = opts;
+  const { breakdown, shell, top, timeZone } = opts;
+  const hasSubRows = breakdown || shell;
   const isSession = report === 'session';
   const lead = isSession
-    ? [left('Session', 36), left('Project', 30), left('Last Activity')]
-    : [left(PERIOD[report].title, report === 'project' ? 40 : undefined)];
+    ? [left('Session', 36), path('Project'), left('Last Activity')]
+    : [report === 'project' ? path('Project') : left(PERIOD[report].title)];
   // A session row is always one session, so the per-session columns only make
   // sense for the other reports. Per Session is filled on breakdown sub-rows.
-  const sessionColumns = isSession ? [] : [right('Sessions'), ...(breakdown ? [right('Per Session')] : [])];
-  const sessionCells = (b) => (isSession ? [] : [b.sessions.size, ...(breakdown ? [''] : [])]);
+  const sessionColumns = isSession ? [] : [right('Sessions'), ...(hasSubRows ? [right('Per Session')] : [])];
+  const sessionCells = (b) => (isSession ? [] : [b.sessions.size, ...(hasSubRows ? [''] : [])]);
   const columns = [
     ...lead,
     left('Models', 28),
@@ -161,8 +189,16 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
       ],
     });
 
+    const limit = top > 0 ? top : Infinity;
+    if (shell) {
+      // Bash / PowerShell calls by purpose, with the programs run, counted under Tools.
+      for (const [name, categories] of b.shellCategories)
+        for (const [category, c] of shellCategoryRows(categories)) {
+          const programs = categoryCommands(b.shellCommands.get(name), category, 3, { counts: false });
+          rows.push(subRow(b, `[${name.toLowerCase()}] ${category}: ${programs}`, c.calls, 0, estimated(c)));
+        }
+    }
     if (breakdown) {
-      const limit = top > 0 ? top : Infinity;
       for (const [name, count] of ranked(b.tools).slice(0, limit))
         rows.push(subRow(b, `[tool] ${name}`, count, 0, estimated(b.toolTokens.get(name))));
       for (const [name, s] of ranked(b.skills, (s) => s.model + s.user).slice(0, limit))
@@ -272,6 +308,37 @@ export function buildSummary({ totals }, opts) {
     ranked(totals.skills, (s) => s.model + s.user),
     ([name, s]) => [name, s.model, s.user, s.model + s.user, ...estCells(totals.skillTokens.get(name))],
   );
+
+  // Programs run by Bash / PowerShell calls, grouped by purpose. Calls and
+  // Share (of that tool's calls) count a call once per purpose.
+  if (opts.shell) {
+    for (const [name, categories] of totals.shellCategories) {
+      const calls = totals.tools.get(name) ?? 0;
+      const sessions = new Set([...categories.values()].flatMap((c) => [...c.sessions]));
+      sections.push({
+        title: `${name} commands`,
+        note: `${calls.toLocaleString('en-US')} calls in ${sessions.size} sessions`,
+        columns: [
+          left('Purpose'),
+          right('Calls'),
+          right('Share'),
+          right('Sessions'),
+          ...estCols,
+          wrapped('Commands (calls, ~tokens)'),
+        ],
+        rows: shellCategoryRows(categories).map(([category, c]) => ({
+          cells: [
+            category,
+            c.calls,
+            share(c.calls, calls),
+            c.sessions.size,
+            ...estCells(c),
+            categoryCommands(totals.shellCommands.get(name), category, top > 0 ? top : Infinity),
+          ],
+        })),
+      });
+    }
+  }
 
   section('Slash commands', [left('Command'), right('Count')], ranked(totals.commands), ([name, count]) => [
     name,

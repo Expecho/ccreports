@@ -31,6 +31,7 @@ Options:
   -u, --until <date>     Include up to and including this date
   -p, --project <text>   Only projects whose path contains <text> (case-insensitive)
   -b, --breakdown        Per-row tool / skill / command / agent sub-rows (period reports)
+  -x, --shell            Programs run by Bash / PowerShell calls (summary tables, sub-rows in period reports)
   -a, --adoption         Append the adoption assessment to the report
   -r, --recommendations  Append best-practice recommendations to the report
   -n, --top <n>          Rows per ranked list (default 15 summary, 5 breakdown; 0 = all)
@@ -64,6 +65,7 @@ try {
       until: { type: 'string', short: 'u' },
       project: { type: 'string', short: 'p' },
       breakdown: { type: 'boolean', short: 'b' },
+      shell: { type: 'boolean', short: 'x' },
       adoption: { type: 'boolean', short: 'a' },
       recommendations: { type: 'boolean', short: 'r' },
       top: { type: 'string', short: 'n' },
@@ -114,7 +116,7 @@ if (opts.top !== undefined) {
   top = Number.parseInt(opts.top, 10);
   if (!Number.isInteger(top) || top < 0) fail('--top must be a non-negative integer');
 } else {
-  top = opts.breakdown ? 5 : 15;
+  top = opts.breakdown || (opts.shell && report !== 'summary') ? 5 : 15;
 }
 if (opts.timezone) {
   try {
@@ -156,6 +158,7 @@ const docOpts = {
   compact,
   showCost,
   breakdown: opts.breakdown,
+  shell: opts.shell,
   top,
   since,
   until,

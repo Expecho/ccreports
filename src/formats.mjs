@@ -35,6 +35,13 @@ function cellValue(cell) {
 
 const truncate = (s, max) => (max && s.length > max ? s.slice(0, max - 1) + '…' : s);
 
+/**
+ * A main row's cell in a column with `clip: 'start'` (paths) keeps its end:
+ * "…\worktreeseature-x". Sub-rows (breakdown labels) are never clipped this way.
+ */
+const clipStart = (s, col, row) =>
+  col.clip === 'start' && row.style !== 'sub' && s.length > col.maxWidth ? '…' + s.slice(-(col.maxWidth - 1)) : s;
+
 // ---------------------------------------------------------------- terminal
 
 function paint(enabled) {
@@ -49,7 +56,7 @@ function terminalTable({ columns, rows }, c) {
   const text = rows.map((r) => ({
     style: r.style,
     cells: r.cells.map((cell, i) => {
-      const s = truncate(cellText(cell), columns[i].maxWidth);
+      const s = truncate(clipStart(cellText(cell), columns[i], r), columns[i].maxWidth);
       return i === 0 && r.style === 'sub' && s ? `  └ ${s}` : s;
     }),
   }));
@@ -183,6 +190,7 @@ function htmlTable({ columns, rows }) {
           const col = columns[i];
           const v = cellValue(cell);
           const classes = [col.align];
+          if (col.wrap) classes.push('wrap');
           if (cell?.kind === 'pct') classes.push('bar');
           const attrs = [`class="${classes.join(' ')}"`];
           if (v != null) attrs.push(`data-v="${v}"`);
@@ -191,7 +199,11 @@ function htmlTable({ columns, rows }) {
             i === 0 && hasChildren
               ? '<button type="button" class="toggle" aria-expanded="false" aria-label="Show breakdown"></button>'
               : '';
-          return `<td ${attrs.join(' ')}>${toggle}${esc(cellText(cell))}</td>`;
+          // Clipped paths show in full on hover.
+          const text = cellText(cell);
+          const shown = clipStart(text, col, r);
+          if (shown !== text) attrs.push(`title="${esc(text)}"`);
+          return `<td ${attrs.join(' ')}>${toggle}${esc(shown)}</td>`;
         })
         .join('');
       const rowAttrs = [];
@@ -263,7 +275,10 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
-main { padding:24px 16px 48px; }
+/* The page grows to its widest table: one horizontal scrollbar for the page, not one per table. */
+main { padding:24px 16px 48px; width:fit-content; min-width:100%; }
+/* Text stays at window width when the page is wider. */
+.meta, .summary, section.plain { max-width:calc(100vw - 32px); }
 h1 { font-size:22px; margin:0 0 4px; }
 .meta { color:var(--muted); margin:0 0 20px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 16px; }
@@ -290,13 +305,13 @@ code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.
 .card .big small { font-size:13px; font-weight:normal; color:var(--muted); }
 .card dl { display:grid; grid-template-columns:1fr auto; gap:4px 12px; margin:0; padding-top:10px; border-top:1px solid var(--line); font-size:13px; font-variant-numeric:tabular-nums; }
 .card dt { color:var(--muted); } .card dd { margin:0; text-align:right; }
-.scroll { overflow-x:auto; }
 table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
 th, td { padding:5px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
 th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
 th[data-sort] { cursor:pointer; user-select:none; }
 th[data-sort]:hover { color:var(--accent); }
 .left { text-align:left; } .right { text-align:right; }
+td.wrap { white-space:normal; min-width:320px; }
 td.bar { background:linear-gradient(to left, var(--bar) var(--p), transparent var(--p)); }
 tr.sub td { color:var(--muted); font-size:13px; }
 tr.sub td:first-child { padding-left:40px; }

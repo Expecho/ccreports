@@ -28,6 +28,7 @@ the request:
 | a trend over time | `daily`, `weekly` or `monthly` |
 | per conversation or per repository | `session` or `project` |
 | what each tool, skill or subagent consumed | add `-b` (breakdown) to a period report |
+| which programs / CLI commands Bash and PowerShell calls ran | add `-x` (`--shell`) to `summary` or a period report |
 | an adoption / maturity assessment | `adoption`, or `-a` to add it to another report |
 | advice: how to use Claude Code better or cheaper | `recommendations`, or `-r` to add it to another report |
 
