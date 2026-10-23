@@ -7,6 +7,18 @@ ccreports adds what you actually *did* with those tokens.
 
 Zero dependencies, Node.js 20+.
 
+## Quick start
+
+No install needed:
+
+```sh
+npx ccreports@latest                                  # summary
+npx ccreports@latest daily -b                         # per day, with tool / skill / agent breakdown
+npx ccreports@latest -a -r -f html -o report.html     # summary + adoption + recommendations as a page
+```
+
+Or install it globally: `npm install -g ccreports`, then run `ccreports`.
+
 ## Install as a Claude Code plugin
 
 At the prompt of a Claude Code terminal session:

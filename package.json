@@ -1,7 +1,27 @@
 {
   "name": "ccreports",
   "version": "0.1.0",
-  "description": "Report Claude Code tool, skill, slash-command and token usage from local session logs",
+  "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size, an adoption assessment and recommendations",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "usage",
+    "tokens",
+    "cost",
+    "report",
+    "cli"
+  ],
+  "author": "Peter Bons",
+  "license": "MIT",
+  "homepage": "https://github.com/Expecho/ccreports#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Expecho/ccreports.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Expecho/ccreports/issues"
+  },
   "type": "module",
   "bin": {
     "ccreports": "bin/ccreports.mjs"
@@ -12,10 +32,10 @@
   ],
   "scripts": {
     "start": "node bin/ccreports.mjs",
-    "test": "node --test \"test/*.test.mjs\""
+    "test": "node --test \"test/*.test.mjs\"",
+    "prepublishOnly": "npm test"
   },
   "engines": {
     "node": ">=20"
-  },
-  "license": "MIT"
+  }
 }
