@@ -1,6 +1,7 @@
 # Publishes to npm when a version tag (v1.2.3) is pushed, using npm trusted
 # publishing (OIDC): no token is stored, and npm adds provenance automatically.
 # The trusted publisher is configured on npmjs.com for this workflow file.
+# Then creates the GitHub release for the tag, unless it already exists.
 name: Publish
 
 on:
@@ -10,7 +11,7 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write # create the GitHub release
 
 jobs:
   publish:
@@ -32,3 +33,11 @@ jobs:
       # Zero dependencies, so there is nothing to install.
       - run: npm test
       - run: npm publish
+      # Generated notes; edit them on GitHub afterwards to describe the release.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" > /dev/null 2>&1 && { echo "release $tag already exists"; exit 0; }
+          gh release create "$tag" --title "ccreports ${tag#v}" --generate-notes --verify-tag
