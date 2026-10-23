@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "start": "node bin/ccreports.mjs",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test",
     "prepublishOnly": "npm test",
     "version": "node scripts/sync-version.mjs && git add .claude-plugin/plugin.json"
   },
