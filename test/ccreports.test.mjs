@@ -6,7 +6,7 @@ import path from 'node:path';
 import { loadRecords, normalizeSkillName } from '../src/loader.mjs';
 import { aggregate, parseDateArg, toJSON, MAIN_AGENT } from '../src/aggregate.mjs';
 import { createPricer, parsePricingPage, BUILTIN } from '../src/pricing.mjs';
-import { buildPeriodReport } from '../src/report.mjs';
+import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 
 const base = { sessionId: 's1', cwd: '/work/app' };
 const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000 };
@@ -276,4 +276,42 @@ test('parses the pricing page tables', () => {
   assert.deepEqual(table['claude-opus-4-8'].fast, { input: 10, output: 50 });
   assert.deepEqual(table['claude-haiku-5-5'], BUILTIN['claude-haiku-5-5']);
   assert.throws(() => parsePricingPage('# Something else'));
+});
+
+test('reports hook runs, failures, duration and added context', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  try {
+    const proj = path.join(root, '-work-app');
+    await mkdir(proj, { recursive: true });
+    const hook = (uuid, ts, attachment, parentUuid = null) => ({ ...base, type: 'attachment', uuid, parentUuid, timestamp: ts, attachment });
+    const lines = [
+      hook('h1', '2026-10-01T10:00:00Z', { type: 'hook_success', hookName: 'SessionStart:startup', hookEvent: 'SessionStart', toolUseID: 'x', command: 'python start.py', durationMs: 900 }),
+      hook('h2', '2026-10-01T10:00:00Z', { type: 'hook_additional_context', hookName: 'SessionStart', hookEvent: 'SessionStart', toolUseID: 'SessionStart', content: ['x'.repeat(400)] }, 'h1'),
+      hook('h3', '2026-10-01T10:00:05Z', { type: 'hook_non_blocking_error', hookName: 'PreToolUse:Bash', hookEvent: 'PreToolUse', command: 'node guard.mjs', durationMs: 100, stderr: 'Failed with non-blocking status code: node:internal/x\r\n  throw err;\r\nError: Cannot find module \'guard.mjs\'\r\n' }),
+      hook('h4', '2026-10-01T10:00:06Z', { type: 'hook_blocking_error', hookName: 'PreToolUse:Bash', hookEvent: 'PreToolUse', command: 'node guard.mjs', durationMs: 50, stderr: 'blocked: '.repeat(40) }),
+      { type: 'system', subtype: 'stop_hook_summary', hookCount: 1, timestamp: '2026-10-01T10:00:07Z' },
+    ];
+    await writeFile(path.join(proj, 's1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    // A resumed session repeats the failed run: must not double count.
+    await writeFile(path.join(proj, 's1-resumed.jsonl'), JSON.stringify(lines[2]) + '\n');
+    const data = await loadRecords({ dirs: [root] });
+    assert.equal(data.hooks.length, 3);
+
+    const { totals } = aggregate(data, { timeZone: 'UTC' });
+    assert.equal(totals.hookRuns, 3);
+    const start = totals.hooks.get('python start.py');
+    assert.equal(start.runs, 1);
+    assert.ok(start.contextTokens > 0, 'additional context is linked to its run');
+    const guard = totals.hooks.get('node guard.mjs');
+    assert.deepEqual([guard.runs, guard.errors, guard.blocked, guard.durationMs], [2, 1, 1, 150]);
+    assert.equal(guard.lastError, "Error: Cannot find module 'guard.mjs'");
+    assert.ok(guard.contextTokens > 0, 'a blocking hook feeds its stderr to the model');
+    assert.deepEqual(toJSON(totals).hooks['node guard.mjs'].events, ['PreToolUse']);
+
+    const doc = buildSummary({ totals }, { top: 15, showCost: false });
+    const section = doc.sections.find((s) => s.title === 'Hooks');
+    assert.deepEqual(section.rows.map((r) => r.cells[0]), ['node guard.mjs', 'python start.py']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -17,7 +17,7 @@ const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 Usage: ccreports [report] [options]
 
 Reports:
-  summary        Totals plus ranked tools, MCP servers, skills, commands, subagents, models (default)
+  summary        Totals plus ranked tools, MCP servers, skills, commands, hooks, subagents, models (default)
   daily          One row per day
   weekly         One row per ISO week (starting Monday)
   monthly        One row per month

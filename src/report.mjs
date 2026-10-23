@@ -278,6 +278,34 @@ export function buildSummary({ totals }, opts) {
     count,
   ]);
 
+  // Hook runs from the transcripts; Context is what the hook added (estimated, re-reads not counted).
+  section(
+    'Hooks',
+    [
+      left('Hook', 60),
+      left('Events'),
+      right('Runs'),
+      right('Failed'),
+      right('Failure rate'),
+      right('Blocked'),
+      right('Avg ms'),
+      right('Total s'),
+      right('Context (est.)'),
+    ],
+    ranked(totals.hooks, (h) => h.runs),
+    ([name, h]) => [
+      name,
+      [...h.events].sort().join(', '),
+      h.runs,
+      h.errors,
+      share(h.errors, h.runs),
+      h.blocked,
+      average(h.durationMs, h.runs),
+      Math.round(h.durationMs / 1000),
+      approx(h.contextTokens),
+    ],
+  );
+
   // Only worth showing when subagents were used at all.
   if (totals.subagentLaunches > 0 || [...totals.agents.keys()].some((k) => k !== MAIN_AGENT)) {
     section(

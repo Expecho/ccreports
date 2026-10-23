@@ -66,6 +66,17 @@ async function listTranscripts(dirs, { includeSubagents }) {
   return files;
 }
 
+/** The most telling line of a failed hook's stderr, e.g. "Error: Cannot find module '…'". */
+export function errorLine(stderr) {
+  const lines = String(stderr ?? '')
+    .replace(/^Failed with non-blocking status code:\s*/, '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const line = lines.find((l) => /error|not found|no such file|cannot|denied/i.test(l)) ?? lines[0] ?? '';
+  return line.length > 160 ? line.slice(0, 159) + '…' : line;
+}
+
 function textOf(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -85,6 +96,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const tools = new Map(); // tool_use id -> record
   const skills = new Map(); // tool_use id | user-message uuid -> record
   const commands = new Map(); // user-message uuid -> record
+  const hooks = new Map(); // attachment uuid -> record
   const titles = new Map(); // sessionId -> ai title
   // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid> } (adoption / recommendations)
   const sessions = new Map();
@@ -100,6 +112,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
 
   for (const { file, projectDir, isSubagent } of files) {
     let pendingCommand = null;
+    const hookRuns = new Map(); // attachment uuid | `event:${event}` -> hook run in this file, for its context line
     // Records from a subagent transcript are tagged with its agent type
     // (from the sibling .meta.json); main-session records get null.
     const agent = isSubagent ? await readAgentType(file) : null;
@@ -113,7 +126,8 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         !line.includes('"type":"user"') &&
         !line.includes('"type":"ai-title"') &&
         !line.includes('"type":"pr-link"') &&
-        !line.includes('"subtype":"compact_boundary"')
+        !line.includes('"subtype":"compact_boundary"') &&
+        !line.includes('"type":"hook_')
       ) {
         continue;
       }
@@ -156,6 +170,36 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         if (!start || rank < start.rank || (rank === start.rank && base.timestamp < start.timestamp)) {
           sessionStart.set(base.sessionId, { rank, timestamp: base.timestamp, cwd: d.cwd });
         }
+      }
+
+      if (d.type === 'attachment') {
+        const a = d.attachment;
+        if (!a?.type?.startsWith('hook_')) continue;
+        const event = a.hookEvent || String(a.hookName ?? '').split(':')[0] || 'unknown';
+        if (a.type === 'hook_additional_context') {
+          // Context a hook returned arrives as its own line after the run.
+          const chars = (Array.isArray(a.content) ? a.content.join('\n') : String(a.content ?? '')).length;
+          const run = hookRuns.get(d.parentUuid) ?? hookRuns.get(`event:${event}`);
+          if (run) run.contextChars += chars;
+          else hooks.set(d.uuid ?? `${file}:${base.timestamp}:${event}`, { ...base, event, command: a.hookName ?? event, outcome: 'context', run: false, durationMs: 0, contextChars: chars });
+          continue;
+        }
+        const outcome = a.type.slice('hook_'.length); // success, non_blocking_error, blocking_error, ...
+        const hook = {
+          ...base,
+          event,
+          command: a.command || a.hookName || event,
+          outcome,
+          run: true,
+          durationMs: a.durationMs ?? 0,
+          // A blocking hook's stderr is fed back to the model.
+          contextChars: outcome === 'blocking_error' ? String(a.stderr ?? '').length : 0,
+        };
+        if (outcome.endsWith('error')) hook.error = errorLine(a.stderr);
+        hooks.set(d.uuid ?? `${file}:${base.timestamp}:${event}:${hook.command}`, hook);
+        if (d.uuid) hookRuns.set(d.uuid, hook);
+        hookRuns.set(`event:${event}`, hook);
+        continue;
       }
 
       if (d.type === 'assistant') {
@@ -242,7 +286,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     attributed.push(...attribution.finish());
   }
 
-  for (const map of [usage, tools, skills, commands]) {
+  for (const map of [usage, tools, skills, commands, hooks]) {
     for (const rec of map.values()) rec.project = sessionStart.get(rec.sessionId)?.cwd ?? rec.project;
   }
 
@@ -259,14 +303,19 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     if (tools.has(id) && skills.has(id)) skills.get(id).tokens = item.tokens; // model-invoked skill = its Skill call
   }
 
+  // Hook context is counted once as it enters the context (no re-reads).
+  const cpt = charsPerToken(calibration);
+  for (const h of hooks.values()) h.contextTokens = Math.round(h.contextChars / cpt);
+
   return {
     sessions,
-    charsPerToken: charsPerToken(calibration),
+    charsPerToken: cpt,
     files: files.length,
     usage: [...usage.values()],
     tools: [...tools.values()],
     skills: [...skills.values()],
     commands: [...commands.values()],
+    hooks: [...hooks.values()],
     titles,
   };
 }
