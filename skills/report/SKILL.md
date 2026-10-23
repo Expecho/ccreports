@@ -42,9 +42,10 @@ Useful options: `-s/--since` and `-u/--until` (`YYYYMMDD`), `-p/--project <text>
   `--since` so the output stays readable. Pass `--no-color`.
 - For a page to view or share, write HTML to a file in the current working
   directory unless the user names another place, e.g.
-  `-f html -o ccreports-adoption.html`, then give the user the full path. On
-  Windows `start "" "<file>"`, on macOS `open "<file>"`, on Linux `xdg-open "<file>"`
-  opens it in their browser - do that only when they ask to see it.
+  `-f html -o ccreports-adoption.html`, then give the user the full path.
+  When they ask to see or open it, add `--open`: the CLI launches the file in
+  its associated app (browser for HTML, Excel for CSV). From your shell it does
+  not open files unless `--open` is passed.
 - If Node.js is missing or older than 20, say so; don't install it for them.
 
 ## Explaining the results

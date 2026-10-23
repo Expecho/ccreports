@@ -169,6 +169,13 @@ node bin/ccreports.mjs weekly -b -f md >> REPORT.md
 
 Warnings (unpriced models, built-in prices) go to stderr, so redirected output stays clean.
 
+A report written with `-o` opens in the app your system associates with the
+file - the browser for HTML, Excel for CSV, your editor for Markdown or JSON -
+when you run ccreports from a terminal; scripts, CI (`CI` set) and agents
+don't open anything unless they pass `--open`. `ccreports -f html --open`
+writes to a temp file and opens it in one step. CSV files start with a UTF-8
+byte order mark so Excel shows non-ASCII characters correctly.
+
 | Option | |
 |---|---|
 | `-s, --since` / `-u, --until` | Date range, `YYYYMMDD` or `YYYY-MM-DD` (inclusive) |
@@ -179,7 +186,9 @@ Warnings (unpriced models, built-in prices) go to stderr, so redirected output s
 | `-n, --top <n>` | Rows per ranked list (`0` = all) |
 | `-f, --format <fmt>` | `table` (default), `json`, `csv`, `markdown` / `md`, `html` |
 | `-j, --json` | Same as `--format json` |
-| `-o, --output <file>` | Write to a file instead of stdout |
+| `-o, --output <file>` | Write to a file instead of stdout; run from a terminal, the file then opens in its associated app |
+| `--open` | Open the report in its associated app (browser, Excel, editor); without `-o` it goes to a temp file |
+| `--no-open` | Don't open the file written with `-o` |
 | `--order asc\|desc` | Row order |
 | `--timezone <tz>` | Timezone for date grouping |
 | `--no-cost` | Skip cost estimates |

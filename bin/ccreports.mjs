@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadRecords, defaultProjectDirs } from '../src/loader.mjs';
 import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
@@ -8,6 +10,7 @@ import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.m
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
 import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
+import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 
 const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 
@@ -33,7 +36,9 @@ Options:
   -n, --top <n>          Rows per ranked list (default 15 summary, 5 breakdown; 0 = all)
   -f, --format <fmt>     table (default), json, csv, markdown (md) or html
   -j, --json             Same as --format json
-  -o, --output <file>    Write to a file instead of stdout
+  -o, --output <file>    Write to a file instead of stdout (opened when run from a terminal)
+      --open             Open the report in its associated app (a temp file without -o)
+      --no-open          Don't open the file written with -o
       --order <asc|desc> Row order for period reports (default asc)
       --timezone <tz>    Timezone for date grouping (default: system)
       --no-cost          Skip cost estimates
@@ -65,6 +70,8 @@ try {
       format: { type: 'string', short: 'f' },
       json: { type: 'boolean', short: 'j' },
       output: { type: 'string', short: 'o' },
+      open: { type: 'boolean' },
+      'no-open': { type: 'boolean' },
       order: { type: 'string' },
       timezone: { type: 'string' },
       'no-subagents': { type: 'boolean' },
@@ -117,7 +124,7 @@ if (opts.timezone) {
   }
 }
 
-const toTTY = !opts.output && process.stdout.isTTY;
+const toTTY = !opts.output && !opts.open && process.stdout.isTTY;
 
 const dirs = opts.dir?.length ? opts.dir : defaultProjectDirs();
 const data = await loadRecords({ dirs, includeSubagents: !opts['no-subagents'] });
@@ -202,9 +209,24 @@ if (format === 'json') {
   }[format]();
 }
 
-if (opts.output) {
-  await writeFile(opts.output, output);
-  console.error(`ccreports: wrote ${opts.output}`);
+// Opening the file: --open forces it (to a temp file when there is no -o),
+// --no-open prevents it, and by default a file written with -o opens when run
+// from a terminal - not from scripts, CI or an agent.
+const open = opts.open || (!opts['no-open'] && opts.output && process.stderr.isTTY && !process.env.CI);
+let file = opts.output;
+if (!file && open) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  file = path.join(dir, `${report}${FORMAT_EXTENSIONS[format]}`);
+}
+
+if (file) {
+  // Excel only reads a CSV as UTF-8 when it starts with a byte order mark.
+  await writeFile(file, format === 'csv' ? '﻿' + output : output);
+  console.error(`ccreports: wrote ${file}`);
+  if (open) {
+    const error = await openFile(file);
+    if (error) console.error(`ccreports: could not open ${file}: ${error}`);
+  }
 } else {
   process.stdout.write(output);
 }
