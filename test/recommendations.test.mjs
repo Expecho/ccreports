@@ -127,3 +127,27 @@ test('recommendations render in every format', () => {
   assert.match(html, /Lots, of &lt;context&gt;\./);
   assert.match(html, /Use <code>\/clear<\/code>\./);
 });
+
+test('flags hooks that keep failing', () => {
+  const hook = (i, outcome) => ({
+    timestamp: '2026-10-05T10:00:00Z',
+    sessionId: 'a',
+    project: '/p',
+    agent: null,
+    event: 'PreToolUse',
+    command: 'node .claude/hooks/guard.mjs',
+    outcome,
+    run: true,
+    durationMs: 100,
+    contextTokens: 0,
+    error: outcome === 'non_blocking_error' ? "Error: Cannot find module 'guard.mjs'" : undefined,
+  });
+  const d = data({ usage: [usage('a', 20_000)], sessions: new Map([['a', session()]]) });
+  d.hooks = [...Array.from({ length: 12 }, (_, i) => hook(i, 'non_blocking_error')), hook(12, 'success')];
+  const rec = recommend(d, { pricer, timeZone: 'UTC' }).find((r) => r.id === 'failing-hooks');
+  assert.ok(rec);
+  assert.match(rec.evidence, /failed 12 of 13 runs \(Error: Cannot find module 'guard\.mjs'\)/);
+
+  d.hooks = d.hooks.slice(0, 5); // too few failures to call out
+  assert.equal(recommend(d, { pricer, timeZone: 'UTC' }).some((r) => r.id === 'failing-hooks'), false);
+});

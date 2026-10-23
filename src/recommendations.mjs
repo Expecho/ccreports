@@ -12,6 +12,7 @@ const EXPENSIVE_CALL = 200_000; // tokens per call for an outlier tool
 const EXPLORATION_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
 const PREMIUM_MODEL = /opus|fable|mythos/;
 const CHEAPER_MODEL = 'claude-sonnet-5-5';
+const MIN_HOOK_FAILURES = 10; // failures before a hook is called out
 
 // Tool-specific advice for a tool whose results take a large share of tokens.
 const TOOL_ADVICE = {
@@ -248,6 +249,28 @@ export function recommend(data, opts = {}) {
         evidence: `Skills were used in ${pct(skills)} of your sessions.`,
         advice:
           'Capture the instructions you keep repeating (how to test, release, review or plan in this repo) as a skill, so Claude follows them every time without you typing them out.',
+      });
+    }
+  }
+
+  // 10. Hooks that keep failing: they run on every matching event and do nothing.
+  {
+    const failing = [...totals.hooks]
+      .filter(([, h]) => h.errors >= MIN_HOOK_FAILURES && h.errors / h.runs >= 0.5)
+      .sort((a, b) => b[1].errors - a[1].errors);
+    if (failing.length) {
+      const errors = failing.reduce((s, [, h]) => s + h.errors, 0);
+      const seconds = failing.reduce((s, [, h]) => s + h.durationMs, 0) / 1000;
+      const shown = failing
+        .slice(0, 3)
+        .map(([cmd, h]) => `\`${cmd}\` failed ${fmt(h.errors)} of ${fmt(h.runs)} runs${h.lastError ? ` (${h.lastError})` : ''}`);
+      recs.push({
+        id: 'failing-hooks',
+        title: 'Fix or remove hooks that keep failing',
+        atStakeUSD: null,
+        evidence: `${failing.length} hook${failing.length === 1 ? '' : 's'} failed ${fmt(errors)} times (${Math.round(seconds)}s spent): ${shown.join('; ')}${failing.length > 3 ? '; …' : ''}.`,
+        advice:
+          'A failing hook gives none of the protection it was added for. Use absolute paths (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/…`) so hooks still resolve when Claude works in a subfolder, check that the interpreter (python, node) is on PATH, and run `/hooks` to review or remove stale ones.',
       });
     }
   }

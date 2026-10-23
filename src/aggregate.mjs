@@ -83,6 +83,8 @@ function newBucket(key) {
     mcpServerTokens: new Map(), // server -> { tokens, costUSD }
     skillTokens: new Map(), // name -> { tokens, costUSD }
     commands: new Map(), // name -> count
+    hookRuns: 0,
+    hooks: new Map(), // command -> { events, runs, errors, blocked, durationMs, contextTokens }
   };
 }
 
@@ -256,6 +258,23 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
     }
   }
 
+  for (const rec of data.hooks ?? []) {
+    for (const b of accept(rec) ?? []) {
+      const h = b.hooks.get(rec.command) ?? { events: new Set(), runs: 0, errors: 0, blocked: 0, durationMs: 0, contextTokens: 0 };
+      h.events.add(rec.event);
+      if (rec.run) {
+        b.hookRuns += 1;
+        h.runs += 1;
+        if (rec.outcome === 'non_blocking_error') h.errors += 1;
+        if (rec.outcome === 'blocking_error') h.blocked += 1;
+      }
+      if (rec.outcome === 'non_blocking_error' && rec.error) h.lastError = rec.error;
+      h.durationMs += rec.durationMs;
+      h.contextTokens += rec.contextTokens ?? 0;
+      b.hooks.set(rec.command, h);
+    }
+  }
+
   const list = [...buckets.values()];
   for (const b of [...list, totals]) {
     const peaks = [...b.sessionPeaks.values()];
@@ -296,6 +315,7 @@ export function toJSON(bucket) {
     toolTokens,
     mcpServerTokens,
     skillTokens,
+    hooks,
     ...rest
   } = bucket;
   const withTokens = (counts, tokens, key) =>
@@ -317,5 +337,7 @@ export function toJSON(bucket) {
       ]),
     ),
     commands: Object.fromEntries(ranked(commands)),
+    // contextTokens: estimated, counted once as it enters the context.
+    hooks: Object.fromEntries(ranked(hooks, (h) => h.runs).map(([k, h]) => [k, { ...h, events: [...h.events].sort() }])),
   };
 }

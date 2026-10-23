@@ -1,6 +1,6 @@
 ---
 name: report
-description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects) - tokens and estimated API cost, tool / skill / slash-command / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, how to use Claude Code more effectively or cheaply, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
+description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects) - tokens and estimated API cost, tool / skill / slash-command / hook / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, how to use Claude Code more effectively or cheaply, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
 argument-hint: "[summary|daily|weekly|monthly|session|project|adoption|recommendations] [options]"
 ---
 
@@ -24,7 +24,7 @@ the request:
 
 | The user wants | Command |
 |---|---|
-| an overview, totals, top tools / skills / commands / models | `summary` (default) |
+| an overview, totals, top tools / skills / commands / hooks / models | `summary` (default) |
 | a trend over time | `daily`, `weekly` or `monthly` |
 | per conversation or per repository | `session` or `project` |
 | what each tool, skill or subagent consumed | add `-b` (breakdown) to a period report |

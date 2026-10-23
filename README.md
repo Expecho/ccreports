@@ -46,7 +46,7 @@ Claude runs the bundled CLI (Node.js 20+ required) and explains the results.
 ## Usage
 
 ```sh
-node bin/ccreports.mjs                 # summary: totals + ranked tools, MCP servers, skills, commands, models
+node bin/ccreports.mjs                 # summary: totals + ranked tools, MCP servers, skills, commands, hooks, models
 node bin/ccreports.mjs daily           # one row per day
 node bin/ccreports.mjs weekly -b       # per week, with top tools/skills/commands as sub-rows
 node bin/ccreports.mjs monthly --json
@@ -145,6 +145,7 @@ stake: high from 15%, medium from 5%.
 | mid-session cache rebuilds cost ≥5% | avoid model switches and resuming big contexts after long breaks |
 | ≥30% of coding sessions are Assisted | hand over whole tasks, plan mode, skills |
 | background agents and worktrees in <10% of sessions; skills in <10% | parallel work; recurring workflows as skills |
+| a hook failed ≥10 times and in ≥50% of its runs | fix paths / interpreters or remove the hook (with a sample error) |
 
 ```sh
 node bin/ccreports.mjs recommendations -s 20261001
@@ -156,7 +157,7 @@ node bin/ccreports.mjs -s 20261001 -a -r -f html -o report.html   # summary + ad
 | Format | Notes |
 |---|---|
 | `table` | Box-drawn terminal tables. Colors only on a TTY; cache columns hidden below 120 columns or with `--compact`. |
-| `json` | Every bucket with all tools, MCP servers, skills, commands, models and subagent types (not limited by `--top`). |
+| `json` | Every bucket with all tools, MCP servers, skills, commands, hooks, models and subagent types (not limited by `--top`). |
 | `markdown` | GitHub-flavored tables, one `##` heading per summary section; breakdown sub-rows included. |
 | `csv` | Raw numbers (no separators, `$` or `%`; cost to 4 decimals). The summary is several tables separated by blank lines; breakdown sub-rows are left out. |
 | `html` | Self-contained page (no external assets), light/dark aware, share columns drawn as bars, sortable columns. |
@@ -214,6 +215,15 @@ byte order mark so Excel shows non-ASCII characters correctly.
 - **Slash commands** – user messages containing `<command-name>`, including
   built-ins like `/clear` and `/model`. A user-typed skill counts both as a
   command and as a skill.
+- **Hooks** – the `hook_*` attachments Claude Code writes per hook run,
+  deduplicated by uuid and grouped by command. The summary's *Hooks* table
+  shows the events each hook ran on, runs, *Failed* (non-blocking errors:
+  the hook crashed or exited non-zero), *Blocked* (exit code 2, the hook
+  stopped the action on purpose), average and total duration, and *Context
+  (est.)*: tokens the hook added to the conversation (`additionalContext`,
+  and a blocking hook's stderr), estimated from the text length and counted
+  once, without re-reads. Successful runs are only logged by some Claude Code
+  versions and hook types, so *Runs* can undercount hooks that succeed.
 - **Subagents** – `<session>/subagents/*.jsonl` is included and attributed to
   the parent session. The summary's *Subagents* table splits requests, tool
   calls, tokens and cost by subagent type (from each transcript's
