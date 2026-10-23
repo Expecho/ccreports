@@ -237,3 +237,15 @@ older than `cleanupPeriodDays` (default 30), so history is limited to that windo
 ```sh
 npm test
 ```
+
+## Releasing
+
+```sh
+npm version patch          # or minor / major: bumps package.json and .claude-plugin/plugin.json, commits, tags
+git push --follow-tags
+```
+
+Pushing the `v*` tag runs the Publish workflow, which checks the versions
+match, runs the tests and publishes to npm with provenance via trusted
+publishing (no token involved). Plugin users get the new version from the
+marketplace on update.

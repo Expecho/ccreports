@@ -1,10 +1,18 @@
 {
   "name": "ccreports",
   "version": "0.1.0",
-  "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size and an adoption assessment",
-  "author": { "name": "Peter Bons" },
+  "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size, an adoption assessment and recommendations",
+  "author": {
+    "name": "Peter Bons"
+  },
   "homepage": "https://github.com/Expecho/ccreports",
   "repository": "https://github.com/Expecho/ccreports",
   "license": "MIT",
-  "keywords": ["usage", "tokens", "cost", "reports", "adoption"]
+  "keywords": [
+    "usage",
+    "tokens",
+    "cost",
+    "reports",
+    "adoption"
+  ]
 }
