@@ -13,6 +13,8 @@ const EXPLORATION_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
 const PREMIUM_MODEL = /opus|fable|mythos/;
 const CHEAPER_MODEL = 'claude-sonnet-5-5';
 const MIN_HOOK_FAILURES = 10; // failures before a hook is called out
+const MIN_CACHE_CONTEXT = 10_000; // smaller contexts are cheap to rebuild
+const MIN_CACHE_MISS_SHARE = 0.03; // share of all cost avoidable cache misses must reach
 
 // Tool-specific advice for a tool whose results take a large share of tokens.
 const TOOL_ADVICE = {
@@ -32,6 +34,54 @@ const fmt = (n) => Math.round(n).toLocaleString('en-US');
 const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const pct = (v) => `${Math.round(v * 100)}%`;
 const usd = (v) => `$${v.toFixed(2)}`;
+
+/**
+ * Requests in a main conversation that read much less from the prompt cache
+ * than the previous request's context, so that context was processed again.
+ * Cause: 'compaction' (by design), 'model switch', 'expired' (the pause was
+ * longer than the cache's 5-minute or 1-hour lifetime) or 'invalidated' (no
+ * pause: the start of the prompt changed). extraUSD is writing the
+ * reprocessed tokens to the cache instead of reading them.
+ */
+export function cacheMisses(usage, pricer) {
+  const bySession = new Map();
+  for (const r of usage) {
+    if (r.agent) continue; // subagents run without pauses
+    const list = bySession.get(r.sessionId) ?? [];
+    list.push(r);
+    bySession.set(r.sessionId, list);
+  }
+  const misses = [];
+  for (const list of bySession.values()) {
+    list.sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
+    let ttlMinutes = 5; // of the cache last written in this session
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1];
+      const r = list[i];
+      if (prev.cacheCreationTokens > 0) ttlMinutes = prev.cacheCreation1hTokens > 0 ? 60 : 5;
+      const prevContext = prev.inputTokens + prev.cacheCreationTokens + prev.cacheReadTokens;
+      if (prevContext < MIN_CACHE_CONTEXT || r.cacheReadTokens >= 0.5 * prevContext) continue;
+      const context = r.inputTokens + r.cacheCreationTokens + r.cacheReadTokens;
+      const reprocessedTokens = Math.max(0, Math.min(prevContext, context) - r.cacheReadTokens);
+      const pauseMinutes = (Date.parse(r.timestamp) - Date.parse(prev.timestamp)) / 60_000;
+      const cause = r.afterCompaction
+        ? 'compaction'
+        : r.model !== prev.model
+          ? 'model switch'
+          : pauseMinutes > ttlMinutes
+            ? 'expired'
+            : 'invalidated';
+      const share1h = r.cacheCreationTokens ? (r.cacheCreation1hTokens ?? 0) / r.cacheCreationTokens : 0;
+      const price = (fields) =>
+        pricer({ model: r.model, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheCreation1hTokens: 0, cacheReadTokens: 0, ...fields }) ?? 0;
+      const extraUSD =
+        price({ cacheCreationTokens: reprocessedTokens, cacheCreation1hTokens: Math.round(reprocessedTokens * share1h) }) -
+        price({ cacheReadTokens: reprocessedTokens });
+      misses.push({ sessionId: r.sessionId, timestamp: r.timestamp, cause, pauseMinutes, ttlMinutes, reprocessedTokens, extraUSD });
+    }
+  }
+  return misses;
+}
 
 /**
  * @returns {{ id, title, impact: 'high'|'medium'|'low', atStakeUSD: number|null, atStakeTokens?: number, evidence: string, advice: string }[]}
@@ -170,36 +220,41 @@ export function recommend(data, opts = {}) {
     }
   }
 
-  // 7. Context re-sent without a cache hit in the middle of a session.
+  // 7. Context re-sent without a cache hit in the middle of a session, by cause.
   if (pricer) {
-    const bySession = new Map();
-    for (const r of usage) {
-      if (r.agent) continue;
-      const list = bySession.get(r.sessionId) ?? [];
-      list.push(r);
-      bySession.set(r.sessionId, list);
-    }
-    let rebuilds = 0;
-    let cost = 0;
-    let tokens = 0;
-    for (const list of bySession.values()) {
-      list.sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
-      for (const r of list.slice(1)) {
-        const context = r.inputTokens + r.cacheCreationTokens + r.cacheReadTokens;
-        if (context < 50_000 || r.cacheCreationTokens < 0.5 * context) continue;
-        rebuilds += 1;
-        tokens += r.cacheCreationTokens;
-        cost += pricer({ ...r, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, webSearchRequests: 0 }) ?? 0;
-      }
-    }
-    if (cost >= 0.05 * totalCost && rebuilds >= 3) {
+    const misses = cacheMisses(usage, pricer);
+    // Compaction rebuilds the cache by design; it has its own recommendation.
+    const avoidable = misses.filter((m) => m.cause !== 'compaction');
+    const cost = avoidable.reduce((s, m) => s + m.extraUSD, 0);
+    if (avoidable.length >= 3 && cost >= MIN_CACHE_MISS_SHARE * totalCost) {
+      const of = (cause) => {
+        const list = avoidable.filter((m) => m.cause === cause);
+        const tokens = list.reduce((s, m) => s + m.reprocessedTokens, 0);
+        return { cause, count: list.length, tokens, avgTokens: list.length ? tokens / list.length : 0, extraUSD: list.reduce((s, m) => s + m.extraUSD, 0) };
+      };
+      const causes = ['expired', 'invalidated', 'model switch'].map(of).filter((c) => c.count);
+      const describe = {
+        expired: (c) => `${c.count} after a pause longer than the cache lifetime`,
+        invalidated: (c) => `${c.count} without a pause, when something early in the conversation changed`,
+        'model switch': (c) => `${c.count} after a model switch`,
+      };
+      const advice = {
+        expired:
+          'Caches last 5 minutes or 1 hour. Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt.',
+        invalidated:
+          'A miss without a pause means the start of the prompt changed, for example when MCP servers connect or change their tools mid-session; keep the tool set stable during a conversation.',
+        'model switch': 'Caches are kept per model: avoid switching models in the middle of a conversation.',
+      };
+      const top = [...causes].sort((a, b) => b.extraUSD - a.extraUSD);
       recs.push({
         id: 'cache-rebuilds',
         title: 'Avoid rebuilding the prompt cache',
         atStakeUSD: cost,
-        evidence: `${rebuilds} times a session re-sent its context without a cache hit (${tok(tokens)} tokens written to the cache, ${usd(cost)}), typically after a long pause or a model switch.`,
-        advice:
-          'Prompt caches expire after a pause and are kept per model. Avoid switching models in the middle of a conversation, and when you return after a break to something unrelated, `/clear` first rather than paying to rebuild a large context.',
+        evidence: `${avoidable.length} times a session re-read its context without a cache hit, costing ${usd(cost)} more than cache reads: ${causes
+          .map((c) => `${describe[c.cause](c)} (avg ${tok(c.avgTokens)} tokens reprocessed, ${usd(c.extraUSD)})`)
+          .join('; ')}.`,
+        advice: top.map((c) => advice[c.cause]).join(' '),
+        causes,
       });
     }
   }

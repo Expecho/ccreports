@@ -119,6 +119,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
 
   for (const { file, projectDir, isSubagent } of files) {
     let pendingCommand = null;
+    let compactedBefore = false; // a compaction since the previous request in this file
     const hookRuns = new Map(); // attachment uuid | `event:${event}` -> hook run in this file, for its context line
     // Records from a subagent transcript are tagged with its agent type
     // (from the sibling .meta.json); main-session records get null.
@@ -156,6 +157,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       if (d.type === 'system') {
         if (d.subtype === 'compact_boundary') {
           attribution.compact();
+          compactedBefore = true;
           if (!agent && d.sessionId) sessionInfo(d.sessionId).compactions.add(d.uuid ?? d.timestamp);
         }
         continue;
@@ -234,7 +236,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
             speed: u.speed,
             inferenceGeo: u.inference_geo,
             webSearchRequests: u.server_tool_use?.web_search_requests ?? 0,
+            // The first request after a compaction rebuilds the cache by design.
+            afterCompaction: compactedBefore || usage.get(key)?.afterCompaction || false,
           });
+          compactedBefore = false;
         }
         for (const c of Array.isArray(m.content) ? m.content : []) {
           if (!c || (c.type !== 'tool_use' && c.type !== 'server_tool_use') || !c.name) continue;

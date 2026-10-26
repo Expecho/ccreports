@@ -143,7 +143,7 @@ stake: high from 15%, medium from 5%.
 | main-session Read/Grep/Glob take ≥12% of tokens while subagents do <25% | delegate exploration to an Explore subagent |
 | subagents run on Opus/Fable and Sonnet 5.5 would save ≥$1 and ≥10% | `model: sonnet` / `haiku` for routine agents (repriced savings shown) |
 | ≥3 sessions (or ≥10%) hit compaction | split tasks, compact yourself at natural breaks |
-| mid-session cache rebuilds cost ≥5% | avoid model switches and resuming big contexts after long breaks |
+| ≥3 cache misses in main conversations, costing ≥3% more than cache reads would | per cause: *expired* (pause longer than the 5-minute / 1-hour cache) → `/compact` or `/clear` before continuing after a break; *invalidated* (no pause, the start of the prompt changed) → keep the tool set stable; *model switch* → stay on one model. Misses right after a compaction are left out |
 | ≥30% of coding sessions are Assisted | hand over whole tasks, plan mode, skills |
 | background agents and worktrees in <10% of sessions; skills in <10% | parallel work; recurring workflows as skills |
 | a hook failed ≥10 times and in ≥50% of its runs | fix paths / interpreters or remove the hook (with a sample error) |

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recommend, buildRecommendations } from '../src/recommendations.mjs';
+import { recommend, buildRecommendations, cacheMisses } from '../src/recommendations.mjs';
 import { createPricer, BUILTIN } from '../src/pricing.mjs';
 import { toMarkdown, toCsv, toHtml, toTerminal } from '../src/formats.mjs';
 
@@ -87,6 +87,27 @@ test('detects prompt-cache rebuilds in the middle of a session', () => {
   const rebuild = recs.find((r) => r.id === 'cache-rebuilds');
   assert.ok(rebuild);
   assert.match(rebuild.evidence, /^4 times/);
+  assert.match(rebuild.evidence, /4 after a pause longer than the cache lifetime/);
+});
+
+test('cache misses are classified by cause', () => {
+  const at = (minute, context, fields = {}) => ({ ...usage('a', context, { minute, cacheWrite: context }), ...fields });
+  const u = [
+    at(0, 100_000, { cacheCreation1hTokens: 100_000 }), // 1-hour cache
+    at(30, 100_000), // 30 minutes later: within the hour, so not expired
+    at(31, 100_000, { model: 'claude-sonnet-5-5' }),
+    at(32, 100_000, { model: 'claude-sonnet-5-5', afterCompaction: true }),
+    { ...at(40, 100_000), model: 'claude-sonnet-5-5', cacheCreationTokens: 0, cacheReadTokens: 100_000 }, // a hit
+  ];
+  const misses = cacheMisses(u, pricer);
+  assert.deepEqual(misses.map((m) => m.cause), ['invalidated', 'model switch', 'compaction']);
+  assert.equal(misses[0].ttlMinutes, 60);
+  assert.equal(misses[0].reprocessedTokens, 100_000);
+  assert.ok(misses[0].extraUSD > 0);
+
+  const late = [at(0, 100_000, { cacheCreation1hTokens: 100_000 }), at(59, 100_000, { minute: 0 })];
+  late[1].timestamp = '2026-10-05T11:30:00Z'; // 90 minutes later
+  assert.equal(cacheMisses(late, pricer)[0].cause, 'expired');
 });
 
 test('without prices, impact follows the share of tokens', () => {
