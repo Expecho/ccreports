@@ -122,6 +122,13 @@ function shortModel(model) {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }
 
+/** GitHub Copilot bills premium requests besides AI credits. */
+function premiumLine(totals) {
+  if (!totals.premiumRequests) return [];
+  const n = Math.round(totals.premiumRequests * 100) / 100;
+  return [`${n.toLocaleString('en-US')} GitHub Copilot premium request${n === 1 ? '' : 's'} (by model multiplier).`];
+}
+
 function rangeText({ since, until }) {
   return since || until ? ` (${since ?? '…'} → ${until ?? 'today'})` : '';
 }
@@ -266,7 +273,7 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   });
 
   return {
-    title: `Claude Code ${PERIOD[report].name} usage${rangeText(opts)}`,
+    title: `${opts.product ?? 'Claude Code'} ${PERIOD[report].name} usage${rangeText(opts)}`,
     sections: [{ columns, rows }, ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])],
   };
 }
@@ -452,5 +459,5 @@ export function buildSummary({ totals }, opts) {
     ([name, m]) => [name, m.requests, m.totalTokens, ...costCell(m.costUSD), share(m.totalTokens, totals.totalTokens)],
   );
 
-  return { title: `Claude Code usage summary${rangeText(opts)}`, sections };
+  return { title: `${opts.product ?? 'Claude Code'} usage summary${rangeText(opts)}`, summary: premiumLine(totals), sections };
 }

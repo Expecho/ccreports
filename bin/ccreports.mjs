@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadRecords, defaultProjectDirs } from '../src/loader.mjs';
+import { loadCopilotRecords, defaultCopilotDirs, mergeData } from '../src/copilot.mjs';
 import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
@@ -14,7 +15,7 @@ import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 import { loadPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
 import { VERSION } from '../src/version.mjs';
 
-const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
+const HELP = `ccreports - Claude Code (and GitHub Copilot) tool, skill, slash-command and token usage
 
 Usage: ccreports [report] [options]
 
@@ -30,6 +31,7 @@ Reports:
   recommendations  Best-practice recommendations based on your usage, with the cost at stake
 
 Options:
+      --source <src>     claude (default), copilot (GitHub Copilot CLI / VS Code agent) or all
   -s, --since <date>     Include from this date (YYYYMMDD or YYYY-MM-DD)
   -u, --until <date>     Include up to and including this date
   -p, --project <text>   Only projects whose path contains <text> (case-insensitive)
@@ -51,6 +53,7 @@ Options:
       --compact          Hide cache token columns (table format)
       --no-color         Disable colors (also honors NO_COLOR)
       --dir <path>       Projects directory to scan (repeatable; default from CLAUDE_CONFIG_DIR or ~/.claude)
+      --copilot-dir <path>  Copilot session-state directory (repeatable; default from COPILOT_HOME or ~/.copilot)
   -v, --version          Show the ccreports version
   -h, --help             Show this help
 `;
@@ -86,6 +89,8 @@ try {
       compact: { type: 'boolean' },
       'no-color': { type: 'boolean' },
       dir: { type: 'string', multiple: true },
+      source: { type: 'string' },
+      'copilot-dir': { type: 'string', multiple: true },
       version: { type: 'boolean', short: 'v' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -108,6 +113,8 @@ const report = positionals[0] ?? 'summary';
 if (!REPORTS.includes(report)) fail(`unknown report "${report}". Expected one of: ${REPORTS.join(', ')}`);
 if (positionals.length > 1) fail(`unexpected argument "${positionals[1]}"`);
 if (opts.order && !['asc', 'desc'].includes(opts.order)) fail('--order must be asc or desc');
+const source = (opts.source ?? 'claude').toLowerCase();
+if (!['claude', 'copilot', 'all'].includes(source)) fail('--source must be claude, copilot or all');
 
 let format = opts.json ? 'json' : (opts.format ?? 'table').toLowerCase();
 if (format === 'md') format = 'markdown';
@@ -137,9 +144,17 @@ if (opts.timezone) {
 
 const toTTY = !opts.output && !opts.open && process.stdout.isTTY;
 
+const includeSubagents = !opts['no-subagents'];
 const dirs = opts.dir?.length ? opts.dir : defaultProjectDirs();
-const data = await loadRecords({ dirs, includeSubagents: !opts['no-subagents'] });
-if (data.files === 0) fail(`no transcripts found in: ${dirs.join(', ')}`);
+const copilotDirs = opts['copilot-dir']?.length ? opts['copilot-dir'] : defaultCopilotDirs();
+const claudeData = source !== 'copilot' ? await loadRecords({ dirs, includeSubagents }) : null;
+const copilotData = source !== 'claude' ? await loadCopilotRecords({ dirs: copilotDirs, includeSubagents }) : null;
+const data = claudeData && copilotData ? mergeData(claudeData, copilotData) : claudeData ?? copilotData;
+if (data.files === 0) {
+  const scanned = [...(claudeData ? dirs : []), ...(copilotData ? copilotDirs : [])];
+  fail(`no ${source === 'copilot' ? 'sessions' : 'transcripts'} found in: ${scanned.join(', ')}`);
+}
+const product = { claude: 'Claude Code', copilot: 'GitHub Copilot', all: 'Claude Code and GitHub Copilot' }[source];
 
 const showCost = !opts['no-cost'];
 let pricer, pricingSource;
@@ -162,7 +177,8 @@ if (showCost) {
 }
 
 // Installed plugins and what of each was used, in every report.
-const plugins = pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project });
+// (Claude Code plugins only.)
+const plugins = claudeData ? pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project }) : [];
 
 // Only the terminal table hides columns to fit the screen.
 const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));
@@ -178,16 +194,36 @@ const docOpts = {
   project: opts.project,
   pricer,
   plugins,
+  product,
 };
 
 // The adoption assessment and recommendations: their own reports, or appended
 // to another with --adoption / --recommendations.
 const adoption = report === 'adoption' || opts.adoption ? buildAdoption(data, docOpts) : null;
-const advice = report === 'recommendations' || opts.recommendations ? buildRecommendations(data, docOpts) : null;
+// Recommendations per product: each names its own settings and commands, and
+// is weighed against that product's own cost.
+let advice = null;
+if (report === 'recommendations' || opts.recommendations) {
+  const parts = [
+    ['claude', claudeData],
+    ['copilot', copilotData],
+  ]
+    .filter(([, d]) => d?.files)
+    .map(([src, d]) => ({ src, doc: buildRecommendations(d, { ...docOpts, source: src }) }));
+  advice =
+    parts.length === 1
+      ? { ...parts[0].doc, items: parts[0].doc.items.map((i) => ({ ...i, source: parts[0].src })) }
+      : {
+          title: `${product} recommendations`,
+          summary: parts.filter((p) => !p.doc.items.length).map((p) => `${p.doc.title.replace(/ recommendations.*/, '')}: ${p.doc.summary[0]}`),
+          sections: parts.flatMap((p) => p.doc.sections.map((s) => ({ ...s, title: p.doc.title }))),
+          items: parts.flatMap((p) => p.doc.items.map((i) => ({ ...i, source: p.src }))),
+        };
+}
 
 let output;
 if (format === 'json') {
-  const meta = { report, since, until, pricingSource, ccreportsVersion: VERSION };
+  const meta = { report, source, since, until, pricingSource, ccreportsVersion: VERSION };
   const adoptionJson = adoption && {
     summary: adoption.summary,
     phases: PHASES,
@@ -221,7 +257,7 @@ if (format === 'json') {
     table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR, version: VERSION }) + '\n',
     markdown: () => toMarkdown(doc, { version: VERSION }),
     csv: () => toCsv(doc),
-    html: () => toHtml(doc, { pricingSource, version: VERSION }),
+    html: () => toHtml(doc, { pricingSource, version: VERSION, copilot: !!copilotData }),
   }[format]();
 }
 

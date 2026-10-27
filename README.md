@@ -1,6 +1,6 @@
 # ccreports
 
-Reports Claude Code **tool calls, skills, slash commands, subagents, token usage and cost** from
+Reports Claude Code (and [GitHub Copilot](#github-copilot)) **tool calls, skills, slash commands, subagents, token usage and cost** from
 the local session transcripts in `~/.claude/projects`. Inspired by
 [ccusage](https://github.com/ccusage/ccusage), which covers tokens and cost;
 ccreports adds what you actually *did* with those tokens.
@@ -199,7 +199,71 @@ byte order mark so Excel shows non-ASCII characters correctly.
 | `--no-subagents` | Exclude subagent transcripts |
 | `--compact` | Hide cache token columns (automatic below 120 columns) |
 | `--dir <path>` | Projects directory (repeatable). Default: `CLAUDE_CONFIG_DIR` (comma-separated) or `~/.claude` / `~/.config/claude` |
+| `--source <src>` | `claude` (default), `copilot` or `all` - see [GitHub Copilot](#github-copilot) |
+| `--copilot-dir <path>` | Copilot session-state directory (repeatable). Default: `COPILOT_HOME` or `~/.copilot`, then `session-state` |
 | `-v, --version` | Print the ccreports version. Reports name it too: in the HTML header line, as a footer in table and Markdown output, and as `ccreportsVersion` in JSON |
+
+### GitHub Copilot
+
+`--source copilot` reports GitHub Copilot instead, from the session logs in
+`~/.copilot/session-state/<id>/events.jsonl`. The Copilot CLI writes them,
+and so does Copilot's agent in VS Code. `--source all` combines both tools in
+one report. Every report works for Copilot, including `recommendations`.
+
+```sh
+node bin/ccreports.mjs --source copilot                 # summary
+node bin/ccreports.mjs weekly -b --source copilot
+node bin/ccreports.mjs --source all -a -f html -o both.html
+```
+
+How the Copilot logs map onto the reports:
+
+- **Tokens.** Recent Copilot versions log usage per request
+  (`session.usage_record`). Older sessions only have totals per model for each
+  run, written at shutdown. These count as that many requests, at the time of
+  shutdown, and have no context size. Sessions that never shut down cleanly
+  have no token counts. Copilot's input tokens include cached tokens, so the
+  cached tokens are subtracted to match Claude's *Input* column.
+- **Cost** is what Copilot billed in AI credits (1 AIU = $0.01). Requests
+  without AI credits are priced at Claude API rates when the model is a
+  Claude model; other models (GPT and local ones) are reported as unpriced.
+  The summary also shows the **premium requests** used.
+- **Tools** keep Copilot's names (`view`, `powershell`, `apply_patch`, …).
+  MCP tools are named `mcp__<server>__<tool>`. `task` calls are subagent
+  launches. `-x` breaks down `powershell` / `bash` commands.
+- **Tokens per tool** are estimates, as for Claude Code. Copilot logs few
+  requests that can be measured, and it trims old tool output, so a
+  session's estimates are scaled down to at most its total input. *Cost (est.)*
+  is the matching share of what the session was billed. Sessions without
+  token counts get no estimates.
+- **Skills, slash commands, hooks, compactions and prompts** come from their
+  own events. Hooks are named by event (`PreToolUse`), since Copilot doesn't
+  log the command. **Pull requests** are the PR links in the output of
+  `gh pr create` or a `create_pull_request` MCP call.
+- Installed plugins are listed for Claude Code only.
+
+**Recommendations** run the same checks as for Claude Code. Their advice
+names Copilot's own levers: `.github/copilot-instructions.md` / `AGENTS.md`,
+custom agents (`.github/agents/`), skills, the `explore` agent, `/compact`,
+`/clear`, `/context`, `/model`, `/mcp`, and plan mode and autopilot. Some
+checks work differently for Copilot:
+
+- **Long contexts and prompt-cache rebuilds** use only the requests logged one
+  by one. Shutdown totals have no context size.
+- **Delegating exploration** is judged by the share of sessions that launched
+  a subagent. Older Copilot logs count subagents' tokens as the main
+  session's, so token shares can't show delegation.
+- **The step-by-step coding check** also says how many coding sessions used
+  plan mode and autopilot.
+- **Cheaper models for subagents** is skipped, since Copilot bills at its
+  own rates and premium-request multipliers.
+- **Running work in parallel** looks at background agents only, since
+  Copilot has no worktree isolation.
+- **Failing hooks:** a hook that errors counts as failed, even though Copilot
+  also denies the tool call it guarded.
+
+With `--source all`, each product gets its own recommendations, weighed
+against its own cost, and in JSON every recommendation has a `source`.
 
 ## What is counted
 

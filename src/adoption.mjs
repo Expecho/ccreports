@@ -25,6 +25,8 @@ const SURFACES = {
   'sdk-ts': 'Agent SDK',
   'sdk-py': 'Agent SDK',
   remote: 'Web',
+  'copilot-cli': 'Copilot CLI',
+  'copilot-vscode': 'Copilot in VS Code',
 };
 
 /** Places one session's stats in a phase (first matching rule wins). */
@@ -57,12 +59,13 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
   for (const t of data.tools) {
     if (!inRange.has(t.sessionId)) continue;
     const c = counts.get(t.sessionId) ?? { edits: 0, backgroundAgents: 0, worktrees: 0, agentMessages: 0, mcpCalls: 0, webCalls: 0 };
-    if (EDIT_TOOLS.has(t.name)) c.edits += 1;
+    // edit / web: flags set by the GitHub Copilot loader, whose tools have other names.
+    if (EDIT_TOOLS.has(t.name) || t.edit) c.edits += 1;
     if (t.background) c.backgroundAgents += 1;
     if (t.worktree) c.worktrees += 1;
     if (t.name === 'SendMessage') c.agentMessages += 1;
     if (t.name.startsWith('mcp__')) c.mcpCalls += 1;
-    if (t.name === 'WebSearch' || t.name === 'WebFetch') c.webCalls += 1;
+    if (t.name === 'WebSearch' || t.name === 'WebFetch' || t.web) c.webCalls += 1;
     counts.set(t.sessionId, c);
   }
   return buckets.map((b) => {
@@ -220,10 +223,10 @@ export function buildAdoption(data, opts) {
 
   const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
   return {
-    title: `Claude Code adoption${range}`,
+    title: `${opts.product ?? 'Claude Code'} adoption${range}`,
     summary: assess(stats, byPhase),
     sections: [
-      { title: 'Adoption cohorts', note: 'sessions by how they used Claude Code', cards: true, columns: cohortColumns, rows: cohortRows },
+      { title: 'Adoption cohorts', note: `sessions by how they used ${opts.product ?? 'Claude Code'}`, cards: true, columns: cohortColumns, rows: cohortRows },
       {
         title: 'Phase mix per week',
         note: 'by the week a session started',
