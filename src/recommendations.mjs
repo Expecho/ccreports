@@ -122,6 +122,29 @@ const PRODUCTS = {
         'A failing hook gives none of the protection it was added for, and a failing `preToolUse` hook also denies the tool call. Use absolute paths so hooks still resolve when Copilot works in a subfolder, check that the interpreter (python, node) is on PATH, and remove stale ones from the configuration that defines them.',
     },
   },
+  // Cursor's logs have no tokens, so only the workflow checks (autonomy, skills) can fire.
+  cursor: {
+    name: 'Cursor',
+    explorationTools: new Set(['Read', 'Grep', 'Glob', 'LS']),
+    toolAdvice: {},
+    defaultToolAdvice: '',
+    subagentTokens: false,
+    subagentModel: false,
+    worktrees: false,
+    parallel: false, // Cursor's logs show no subagent launches to measure
+    advice: {
+      longContext: '',
+      delegate: '',
+      compaction: '',
+      cache: {},
+      autonomy:
+        'Describe the whole task up front - goal, constraints and how to verify it - and let the agent run. Use Plan mode for bigger changes, so you agree on the plan once instead of steering each step, and turn workflows you repeat into skills.',
+      parallel: '',
+      skills:
+        'Capture the instructions you keep repeating (how to test, release, review or plan in this repo) as a skill (`.cursor/skills/<name>/SKILL.md`, or `~/.cursor/skills` for all your projects), so the agent follows them every time without you typing them out.',
+      hooks: '',
+    },
+  },
 };
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
@@ -185,7 +208,8 @@ export function recommend(data, opts = {}) {
   const p = PRODUCTS[opts.source ?? 'claude'];
   const inRange = recordFilter(opts);
   const usage = data.usage.filter(inRange);
-  if (!usage.length) return [];
+  // Activity without tokens (Cursor) still feeds the workflow checks.
+  if (!usage.length && !(data.events ?? []).some(inRange)) return [];
   const { totals } = aggregate(data, { ...opts, report: 'summary' });
   const stats = sessionStats(data, opts);
   // GitHub Copilot records carry their billed cost.
@@ -386,7 +410,7 @@ export function recommend(data, opts = {}) {
     const share = (f) => stats.filter(f).length / stats.length;
     const background = share((s) => s.backgroundAgents > 0);
     const worktrees = share((s) => s.worktrees > 0);
-    if (background < 0.1 && (!p.worktrees || worktrees < 0.1)) {
+    if (p.parallel !== false && background < 0.1 && (!p.worktrees || worktrees < 0.1)) {
       recs.push({
         id: 'parallel',
         title: 'Run independent work in parallel',

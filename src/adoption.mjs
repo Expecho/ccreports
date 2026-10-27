@@ -27,6 +27,8 @@ const SURFACES = {
   remote: 'Web',
   'copilot-cli': 'Copilot CLI',
   'copilot-vscode': 'Copilot in VS Code',
+  'cursor-cli': 'Cursor CLI',
+  'cursor-ide': 'Cursor editor',
 };
 
 /** Places one session's stats in a phase (first matching rule wins). */
@@ -166,9 +168,11 @@ export function buildAdoption(data, opts) {
     right('PRs'),
     right('Edits per session'),
     right('Median tool calls per prompt'),
-    right('Tokens per session'),
+    ...(opts.tokens !== false ? [right('Tokens per session')] : []),
     ...(showCost ? [right('Cost per session')] : []),
   ];
+  // The phase descriptions name Claude; other products' reports say "the agent".
+  const agentName = (opts.product ?? 'Claude Code') === 'Claude Code' ? 'Claude' : 'The agent';
   const cohortRows = PHASES.map((p) => {
     const list = byPhase.get(p.key);
     const prs = sum(list, (s) => s.prs);
@@ -176,14 +180,14 @@ export function buildAdoption(data, opts) {
     return {
       cells: [
         p.title,
-        p.description,
+        p.description.replace(/^Claude\b/, agentName),
         average(prs, list.length),
         list.length,
         share(list.length, stats.length),
         prs,
         average(sum(list, (s) => s.edits), list.length),
         m == null ? '' : average(m, 1),
-        list.length ? Math.round(sum(list, (s) => s.totalTokens) / list.length) : '',
+        ...(opts.tokens !== false ? [list.length ? Math.round(sum(list, (s) => s.totalTokens) / list.length) : ''] : []),
         ...(showCost ? [list.length ? money(sum(list, (s) => s.costUSD) / list.length) : ''] : []),
       ],
     };

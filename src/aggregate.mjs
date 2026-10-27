@@ -299,6 +299,9 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
     }
   }
 
+  // Activity without tokens (Cursor's prompts): counts the session and its time only.
+  for (const rec of data.events ?? []) accept(rec);
+
   for (const rec of data.hooks ?? []) {
     for (const b of accept(rec) ?? []) {
       const h = b.hooks.get(rec.command) ?? { events: new Set(), runs: 0, errors: 0, blocked: 0, durationMs: 0, contextTokens: 0 };
