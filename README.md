@@ -139,14 +139,14 @@ stake: high from 15%, medium from 5%.
 | Fires when | Recommends |
 |---|---|
 | ≥25% of cost comes from requests with >200k tokens of context | new session or `/clear` per task, `/compact` with a focus |
-| a tool's results take ≥10% of all tokens, or ≥200k tokens per call | tool-specific trimming (Bash/PowerShell output, Read ranges, Edit over Write, lean skills, filters for MCP tools) |
+| a tool's results take ≥10% of all tokens, or ≥200k tokens per call | tool-specific levers the user controls: quiet scripts, `CLAUDE.md` guidance, output caps (`bashOutputMaxChars`, `CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS`, `MAX_MCP_OUTPUT_TOKENS`), `PostToolUse` hooks, subagents, lean skills |
 | main-session Read/Grep/Glob take ≥12% of tokens while subagents do <25% | delegate exploration to an Explore subagent |
-| subagents run on Opus/Fable and Sonnet 5.5 would save ≥$1 and ≥10% | `model: sonnet` / `haiku` for routine agents (repriced savings shown) |
+| subagents run on Opus/Fable and Sonnet 5.5 would save ≥$1 and ≥10% | `model: sonnet` / `haiku` for routine agents, `CLAUDE_CODE_SUBAGENT_MODEL` for built-in ones (repriced savings shown) |
 | ≥3 sessions (or ≥10%) hit compaction | split tasks, compact yourself at natural breaks |
-| ≥3 cache misses in main conversations, costing ≥3% more than cache reads would | per cause: *expired* (pause longer than the 5-minute / 1-hour cache) → `/compact` or `/clear` before continuing after a break; *invalidated* (no pause, the start of the prompt changed) → keep the tool set stable; *model switch* → stay on one model. Misses right after a compaction are left out |
+| ≥3 cache misses in main conversations, costing ≥3% more than cache reads would | per cause: *expired* (pause longer than the 5-minute / 1-hour cache) → `/compact` or `/clear` before continuing after a break, `promptCacheTtl`; *invalidated* (no pause, the start of the prompt changed) → keep the tool set stable (matters when tool search is off); *model switch* → pick the model at the start. Misses right after a compaction are left out |
 | ≥30% of coding sessions are Assisted | hand over whole tasks, plan mode, skills |
-| background agents and worktrees in <10% of sessions; skills in <10% | parallel work; recurring workflows as skills |
-| a hook failed ≥10 times and in ≥50% of its runs | fix paths / interpreters or remove the hook (with a sample error) |
+| background agents and worktrees in <10% of sessions; skills in <10% | parallel subagents, worktrees (`isolation: worktree`, `claude -w`); recurring workflows as skills |
+| a hook failed ≥10 times and in ≥50% of its runs | fix paths / interpreters or remove the hook from its settings file (with a sample error) |
 
 ```sh
 node bin/ccreports.mjs recommendations -s 20261001

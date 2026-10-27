@@ -17,18 +17,20 @@ const MIN_CACHE_CONTEXT = 10_000; // smaller contexts are cheap to rebuild
 const MIN_CACHE_MISS_SHARE = 0.03; // share of all cost avoidable cache misses must reach
 
 // Tool-specific advice for a tool whose results take a large share of tokens.
+// Claude picks the tool calls, so the advice names what the user controls:
+// requests, CLAUDE.md, settings, hooks, the repo's scripts, their own skills and agents.
 const TOOL_ADVICE = {
-  Bash: 'Keep command output short: pipe through `head`, `tail` or `grep`, use quiet flags (`-q`, `--silent`), and show only failing tests. Every line of output stays in the context and is re-sent with each later request.',
+  Bash: 'Make the repo\'s test and build scripts quiet (only failures), and ask in `CLAUDE.md` for short command output (`head`, `grep`, quiet flags). The `bashOutputMaxChars` setting caps what a command returns, and a `PostToolUse` hook can shorten a noisy command\'s output (`updatedToolOutput`). Every line of output stays in the context and is re-sent with each later request.',
   PowerShell:
-    'Keep command output short: `Select-Object -First`, `Select-String`, quiet switches, and show only failing tests. Every line of output stays in the context and is re-sent with each later request.',
-  Read: 'Find the right place with Grep first, then read that range (offset/limit) rather than whole files; let an Explore subagent scan large files and report back.',
-  Write: 'Use Edit for changes to existing files instead of rewriting them with Write, and keep generated files small: the whole content is written as output tokens and then stays in the context.',
-  Edit: 'Large replacements stay in the context; for sweeping rewrites, hand the work to a subagent so the main conversation only keeps the summary.',
-  Agent: 'Ask subagents for short, structured answers (a list of findings, file paths) instead of long reports: their final message is what lands in your context.',
-  Skill: 'Keep skills lean: put detailed instructions and examples in reference files the skill reads only when needed, since the whole SKILL.md is loaded into the context each time it runs.',
+    'Make the repo\'s test and build scripts quiet (only failures), and ask in `CLAUDE.md` for short command output (`Select-Object -First`, `Select-String`, quiet switches). The `bashOutputMaxChars` setting caps what a command returns, and a `PostToolUse` hook can shorten a noisy command\'s output (`updatedToolOutput`). Every line of output stays in the context and is re-sent with each later request.',
+  Read: 'Note in `CLAUDE.md` where things live, so Claude finds the right file without reading around it; split very large files; and ask for an Explore subagent for broad "find where…" questions, so the file contents stay out of your conversation. `CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS` (default 25,000) caps a single read.',
+  Write: 'Claude writes the whole file as output tokens, which then stay in the context: for large or repetitive files, ask for a script that generates them instead of the files themselves.',
+  Edit: 'Large replacements stay in the context: ask Claude to do sweeping rewrites in a subagent, so the main conversation only keeps the summary.',
+  Agent: 'A subagent\'s final message is what lands in your context: ask for short, structured answers (a list of findings, file paths) in your own agents\' definitions (`.claude/agents/<name>.md`) and when you ask for built-in ones.',
+  Skill: 'Keep your skills lean: put detailed instructions and examples in reference files the skill reads only when needed, since the whole SKILL.md is loaded into the context each time it runs.',
 };
 const DEFAULT_TOOL_ADVICE =
-  'Its results are large: check whether the tool supports filters, fields or pagination, or call it from a subagent so only a summary reaches your conversation.';
+  'Its results are large: prefer tools or parameters that filter or page the results, lower `MAX_MCP_OUTPUT_TOKENS` (default 25,000) for MCP tools, or ask Claude to call it from a subagent so only a summary reaches your conversation.';
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
 const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
@@ -199,7 +201,7 @@ export function recommend(data, opts = {}) {
         atStakeUSD: savings,
         evidence: `Subagents on ${[...new Set(top.map(([, e]) => e.model))].join(' / ')}: ${top.map(([type, e]) => `${type} ${usd(e.cost)}`).join(', ')}. The same requests on Claude Sonnet 5.5 would have cost about ${usd(savings)} less.`,
         advice:
-          'Set `model: sonnet` in the definition of your own agents that do routine work (`.claude/agents/<name>.md`), or `model: haiku` for search-only agents such as scouts. For built-in agents like general-purpose, ask Claude to delegate with a cheaper model (the Agent tool takes one). Keep the most capable model for agents that need deep reasoning.',
+          'Set `model: sonnet` in the definition of your own agents that do routine work (`.claude/agents/<name>.md`), or `model: haiku` for search-only agents such as scouts. For built-in agents like general-purpose, set `CLAUDE_CODE_SUBAGENT_MODEL` (in the `env` of your settings), or ask Claude to delegate with a cheaper model (the Agent tool takes one per call). Keep the most capable model for agents that need deep reasoning.',
       });
     }
   }
@@ -240,10 +242,10 @@ export function recommend(data, opts = {}) {
       };
       const advice = {
         expired:
-          'Caches last 5 minutes or 1 hour. Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt.',
+          'The main conversation\'s cache lasts 5 minutes with an API key or cloud provider and 1 hour on a Claude subscription; the `promptCacheTtl` setting (`5m` or `1h`) chooses it, and 1-hour cache writes cost more. Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt; `/usage` shows whether the cache is still warm.',
         invalidated:
-          'A miss without a pause means the start of the prompt changed, for example when MCP servers connect or change their tools mid-session; keep the tool set stable during a conversation.',
-        'model switch': 'Caches are kept per model: avoid switching models in the middle of a conversation.',
+          'A miss without a pause means the start of the prompt changed. With tool search on (the default on supported models) MCP servers connecting mid-session no longer do this; with it off, servers connecting or tools being removed mid-session do, so keep the tool set stable during a conversation.',
+        'model switch': 'Each model has its own cache: switching with `/model` mid-conversation re-reads the whole history. Pick the model at the start, or `/compact` before you switch.',
       };
       const top = [...causes].sort((a, b) => b.extraUSD - a.extraUSD);
       recs.push({
@@ -292,7 +294,7 @@ export function recommend(data, opts = {}) {
         atStakeUSD: null,
         evidence: `Background agents appear in ${pct(background)} and worktrees in ${pct(worktrees)} of your sessions.`,
         advice:
-          'Let long-running or independent tasks run as background agents while you keep working, and use worktrees (`isolation: "worktree"`) when several agents change code at the same time.',
+          'Ask Claude to run independent tasks as parallel subagents: they run in the background while you keep working (`Ctrl+B` moves a long-running one there). When several agents change code at the same time, give each its own worktree: `isolation: worktree` in an agent\'s definition, or `claude -w <name>` for a whole session.',
       });
     }
     const skills = share((s) => s.skills > 0);
@@ -325,7 +327,7 @@ export function recommend(data, opts = {}) {
         atStakeUSD: null,
         evidence: `${failing.length} hook${failing.length === 1 ? '' : 's'} failed ${fmt(errors)} times (${Math.round(seconds)}s spent): ${shown.join('; ')}${failing.length > 3 ? '; …' : ''}.`,
         advice:
-          'A failing hook gives none of the protection it was added for. Use absolute paths (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/…`) so hooks still resolve when Claude works in a subfolder, check that the interpreter (python, node) is on PATH, and run `/hooks` to review or remove stale ones.',
+          'A failing hook gives none of the protection it was added for. Use absolute paths (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/…`) so hooks still resolve when Claude works in a subfolder, check that the interpreter (python, node) is on PATH, and remove stale ones from the settings file that defines them (`/hooks` lists them, read-only).',
       });
     }
   }
