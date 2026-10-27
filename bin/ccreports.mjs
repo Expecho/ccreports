@@ -11,13 +11,15 @@ import { loadPricingTable, createPricer } from '../src/pricing.mjs';
 import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
+import { loadPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
 
 const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 
 Usage: ccreports [report] [options]
 
 Reports:
-  summary        Totals plus ranked tools, MCP servers, skills, commands, hooks, subagents, models (default)
+  summary        Totals plus ranked tools, MCP servers, skills, commands, hooks, installed
+                 plugins, subagents, models (default)
   daily          One row per day
   weekly         One row per ISO week (starting Monday)
   monthly        One row per month
@@ -152,6 +154,9 @@ if (showCost) {
   if (unpriced.length) console.error(`ccreports: no price for ${unpriced.join(', ')}; counted as $0.`);
 }
 
+// Installed plugins and what of each was used: summary only.
+const plugins = report === 'summary' ? pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project }) : [];
+
 // Only the terminal table hides columns to fit the screen.
 const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));
 const docOpts = {
@@ -165,6 +170,7 @@ const docOpts = {
   timeZone: opts.timezone,
   project: opts.project,
   pricer,
+  plugins,
 };
 
 // The adoption assessment and recommendations: their own reports, or appended
@@ -187,7 +193,7 @@ if (format === 'json') {
   } else if (report === 'recommendations') {
     json = { ...meta, recommendations: advice.items };
   } else if (report === 'summary') {
-    json = { ...meta, totals: toJSON(result.totals) };
+    json = { ...meta, totals: toJSON(result.totals), plugins: pluginsJSON(plugins) };
   } else {
     json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
   }

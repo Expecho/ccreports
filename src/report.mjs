@@ -373,6 +373,46 @@ export function buildSummary({ totals }, opts) {
     ],
   );
 
+  // Installed plugins (from the plugin config, not the transcripts) with what
+  // their skills, commands, subagents, MCP servers and hooks were used.
+  if (opts.plugins?.length) {
+    const yesNo = (v) => (v == null ? '' : v ? 'yes' : 'no');
+    sections.push({
+      title: 'Installed plugins',
+      note: 'usage is per plugin, across its installs',
+      columns: [
+        left('Plugin'),
+        left('Marketplace'),
+        left('Version'),
+        left('Scope'),
+        path('Project'),
+        left('Enabled'),
+        left('Updated'),
+        right('Skills'),
+        right('Cmds'),
+        right('Agents'),
+        right('MCP calls'),
+        right('Hook runs'),
+      ],
+      rows: opts.plugins.map((p) => ({
+        cells: [
+          p.name,
+          p.marketplace,
+          p.version,
+          p.scope,
+          p.projectPath ?? '',
+          yesNo(p.enabled),
+          p.lastUpdated?.slice(0, 10) ?? '',
+          p.usage.skills,
+          p.usage.commands,
+          p.usage.agents,
+          p.usage.mcpCalls,
+          p.usage.hookRuns,
+        ],
+      })),
+    });
+  }
+
   // Only worth showing when subagents were used at all.
   if (totals.subagentLaunches > 0 || [...totals.agents.keys()].some((k) => k !== MAIN_AGENT)) {
     section(

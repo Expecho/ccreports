@@ -46,7 +46,7 @@ Claude runs the bundled CLI (Node.js 20+ required) and explains the results.
 ## Usage
 
 ```sh
-node bin/ccreports.mjs                 # summary: totals + ranked tools, MCP servers, skills, commands, hooks, models
+node bin/ccreports.mjs                 # summary: totals + ranked tools, MCP servers, skills, commands, hooks, plugins, models
 node bin/ccreports.mjs daily           # one row per day
 node bin/ccreports.mjs weekly -b       # per week, with top tools/skills/commands as sub-rows
 node bin/ccreports.mjs -x              # summary plus the programs run by Bash / PowerShell calls
@@ -246,6 +246,18 @@ byte order mark so Excel shows non-ASCII characters correctly.
   and a blocking hook's stderr), estimated from the text length and counted
   once, without re-reads. Successful runs are only logged by some Claude Code
   versions and hook types, so *Runs* can undercount hooks that succeed.
+- **Installed plugins** – not from the transcripts but from
+  `plugins/installed_plugins.json` next to the projects directory: one row per
+  install with marketplace, version, scope (user, project or local, with the
+  project path), *Enabled* (the `enabledPlugins` setting of that scope's
+  settings file; blank when not set) and last update. The usage columns count
+  the plugin's skill calls (`plugin:skill`), slash commands (`/plugin:cmd`),
+  subagent launches (`plugin:agent`), MCP calls (servers named
+  `plugin_<plugin>_<server>`) and runs of the hooks in its `hooks.json`, within
+  the selected period. Usage is per plugin, so two installs of one plugin show
+  the same numbers. Plugins that were never used sort last. `--project` keeps
+  user-scope installs and those of matching projects. JSON output of the
+  summary has them under `plugins`.
 - **Subagents** – `<session>/subagents/*.jsonl` is included and attributed to
   the parent session. The summary's *Subagents* table splits requests, tool
   calls, tokens and cost by subagent type (from each transcript's

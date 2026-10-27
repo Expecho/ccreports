@@ -25,6 +25,7 @@ the request:
 | The user wants | Command |
 |---|---|
 | an overview, totals, top tools / skills / commands / hooks / models | `summary` (default) |
+| which plugins are installed (version, enabled) and whether they're used | `summary` (its *Installed plugins* table) |
 | a trend over time | `daily`, `weekly` or `monthly` |
 | per conversation or per repository | `session` or `project` |
 | what each tool, skill or subagent consumed | add `-b` (breakdown) to a period report |
