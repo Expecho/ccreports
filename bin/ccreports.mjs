@@ -19,7 +19,7 @@ Usage: ccreports [report] [options]
 
 Reports:
   summary        Totals plus ranked tools, MCP servers, skills, commands, hooks, installed
-                 plugins, subagents, models (default)
+                 plugins, subagents, models (default). Every report lists installed plugins.
   daily          One row per day
   weekly         One row per ISO week (starting Monday)
   monthly        One row per month
@@ -154,8 +154,8 @@ if (showCost) {
   if (unpriced.length) console.error(`ccreports: no price for ${unpriced.join(', ')}; counted as $0.`);
 }
 
-// Installed plugins and what of each was used: summary only.
-const plugins = report === 'summary' ? pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project }) : [];
+// Installed plugins and what of each was used, in every report.
+const plugins = pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project });
 
 // Only the terminal table hides columns to fit the screen.
 const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));
@@ -195,7 +195,7 @@ if (format === 'json') {
   } else if (report === 'summary') {
     json = { ...meta, totals: toJSON(result.totals), plugins: pluginsJSON(plugins) };
   } else {
-    json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals) };
+    json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals), plugins: pluginsJSON(plugins) };
   }
   if (adoptionJson && report !== 'adoption') json.adoption = adoptionJson;
   if (advice && report !== 'recommendations') json.recommendations = advice.items;

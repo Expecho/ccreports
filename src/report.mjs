@@ -135,6 +135,46 @@ const PERIOD = {
 };
 
 /** daily / weekly / monthly / session / project report. */
+// Installed plugins (from the plugin config, not the transcripts) with what
+// their skills, commands, subagents, MCP servers and hooks were used.
+function pluginSection(plugins) {
+  const yesNo = (v) => (v == null ? '' : v ? 'yes' : 'no');
+  return {
+    title: 'Installed plugins',
+    note: 'usage is per plugin, across its installs',
+    columns: [
+      left('Plugin'),
+      left('Marketplace'),
+      left('Version'),
+      left('Scope'),
+      path('Project'),
+      left('Enabled'),
+      left('Updated'),
+      right('Skills'),
+      right('Cmds'),
+      right('Agents'),
+      right('MCP calls'),
+      right('Hook runs'),
+    ],
+    rows: plugins.map((p) => ({
+      cells: [
+        p.name,
+        p.marketplace,
+        p.version,
+        p.scope,
+        p.projectPath ?? '',
+        yesNo(p.enabled),
+        p.lastUpdated?.slice(0, 10) ?? '',
+        p.usage.skills,
+        p.usage.commands,
+        p.usage.agents,
+        p.usage.mcpCalls,
+        p.usage.hookRuns,
+      ],
+    })),
+  };
+}
+
 export function buildPeriodReport(report, { buckets, totals }, opts) {
   const { breakdown, shell, top, timeZone } = opts;
   const hasSubRows = breakdown || shell;
@@ -227,7 +267,7 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
 
   return {
     title: `Claude Code ${PERIOD[report].name} usage${rangeText(opts)}`,
-    sections: [{ columns, rows }],
+    sections: [{ columns, rows }, ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])],
   };
 }
 
@@ -373,45 +413,7 @@ export function buildSummary({ totals }, opts) {
     ],
   );
 
-  // Installed plugins (from the plugin config, not the transcripts) with what
-  // their skills, commands, subagents, MCP servers and hooks were used.
-  if (opts.plugins?.length) {
-    const yesNo = (v) => (v == null ? '' : v ? 'yes' : 'no');
-    sections.push({
-      title: 'Installed plugins',
-      note: 'usage is per plugin, across its installs',
-      columns: [
-        left('Plugin'),
-        left('Marketplace'),
-        left('Version'),
-        left('Scope'),
-        path('Project'),
-        left('Enabled'),
-        left('Updated'),
-        right('Skills'),
-        right('Cmds'),
-        right('Agents'),
-        right('MCP calls'),
-        right('Hook runs'),
-      ],
-      rows: opts.plugins.map((p) => ({
-        cells: [
-          p.name,
-          p.marketplace,
-          p.version,
-          p.scope,
-          p.projectPath ?? '',
-          yesNo(p.enabled),
-          p.lastUpdated?.slice(0, 10) ?? '',
-          p.usage.skills,
-          p.usage.commands,
-          p.usage.agents,
-          p.usage.mcpCalls,
-          p.usage.hookRuns,
-        ],
-      })),
-    });
-  }
+  if (opts.plugins?.length) sections.push(pluginSection(opts.plugins));
 
   // Only worth showing when subagents were used at all.
   if (totals.subagentLaunches > 0 || [...totals.agents.keys()].some((k) => k !== MAIN_AGENT)) {
