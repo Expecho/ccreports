@@ -315,3 +315,18 @@ test('reports hook runs, failures, duration and added context', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('session names are at most 35 characters in reports', async () => {
+  const { sessionName, SESSION_NAME_MAX } = await import('../src/report.mjs');
+  assert.equal(SESSION_NAME_MAX, 35);
+  assert.equal(sessionName('Short title'), 'Short title');
+  assert.equal(sessionName('x'.repeat(35)), 'x'.repeat(35));
+  const long = sessionName('Investigate why the nightly build fails on Windows agents');
+  assert.equal(long.length, 35);
+  assert.equal(long, 'Investigate why the nightly build …');
+
+  const rec = { timestamp: '2026-10-01T10:00:00Z', sessionId: 's1', project: '/p', agent: null, name: 'Bash' };
+  const data = { usage: [], tools: [rec], skills: [], commands: [], hooks: [], titles: new Map([['s1', 'A'.repeat(50)]]) };
+  const doc = buildPeriodReport('session', aggregate(data, { report: 'session' }), {});
+  assert.equal(doc.sections[0].rows[0].cells[0], 'A'.repeat(34) + '…');
+});

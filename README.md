@@ -1,7 +1,9 @@
 # ccreports
 
-Reports Claude Code (and [GitHub Copilot](#github-copilot) and [Cursor](#cursor)) **tool calls, skills, slash commands, subagents, token usage and cost** from
-the local session transcripts in `~/.claude/projects`. Inspired by
+Reports Claude Code **tool calls, skills, slash commands, subagents, token usage and cost** from
+the local session transcripts in `~/.claude/projects`, and the same for
+[GitHub Copilot](#github-copilot) and [Cursor](#cursor) from their own local
+logs (Cursor: activity only). Inspired by
 [ccusage](https://github.com/ccusage/ccusage), which covers tokens and cost;
 ccreports adds what you actually *did* with those tokens.
 
@@ -15,6 +17,7 @@ No install needed:
 npx ccreports@latest                                  # summary
 npx ccreports@latest daily -b                         # per day, with tool / skill / agent breakdown
 npx ccreports@latest -a -r -f html -o report.html     # summary + adoption + recommendations as a page
+npx ccreports@latest --source copilot                 # GitHub Copilot instead (cursor, or all for every tool)
 ```
 
 Or install it globally: `npm install -g ccreports`, then run `ccreports`.
@@ -62,6 +65,10 @@ the sessions active in that period. A session that spans two days counts in
 both, so rows can add up to more than the total. With `--breakdown`, a
 **Per Session** column gives each tool / skill / command / agent count divided
 by the row's sessions.
+
+The `session` report names each session by its title (the first 8 characters
+of its id when it has none), cut to at most 35 characters with `…` in every
+display format. JSON keeps the full title.
 
 **Tokens per tool, skill and subagent.** Breakdown sub-rows fill the token
 columns like their parent row: *Output* (the tool input the model wrote),
@@ -115,7 +122,8 @@ The report opens with a short written assessment, then shows the cohorts (as
 cards in HTML) with PRs, edits, tool calls per prompt, tokens and cost per
 session; the phase mix per week; how many sessions use each capability
 (skills, subagents, background agents, worktrees, MCP, web, PRs); and usage by
-surface (CLI, desktop, IDE, SDK). PRs are the `pr-link` entries Claude Code
+surface (CLI, desktop, IDE, SDK, and the Copilot and Cursor surfaces with
+`--source`). PRs are the `pr-link` entries Claude Code
 records when it creates a PR; prompts exclude agent-to-agent messages and
 task notifications. `--json` returns the per-session stats and phase.
 
@@ -314,6 +322,9 @@ How the transcripts map onto the reports:
   kept only in the editor's database and aren't read.
 
 ## What is counted
+
+For Claude Code; GitHub Copilot and Cursor are described in their own
+sections above.
 
 - **Tokens** – `usage` from each assistant message, deduplicated per
   `message.id + requestId`. One API response is written as several lines, and

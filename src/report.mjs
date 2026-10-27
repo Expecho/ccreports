@@ -19,6 +19,11 @@ const left = (title, maxWidth) => ({ title, align: 'left', maxWidth });
 const path = (title) => ({ title, align: 'left', maxWidth: 40, clip: 'start' });
 const wrapped = (title) => ({ title, align: 'left', maxWidth: 100, wrap: true });
 
+// Session names: at most 35 characters in every display format (JSON keeps the full title).
+export const SESSION_NAME_MAX = 35;
+export const sessionName = (title) =>
+  title.length > SESSION_NAME_MAX ? title.slice(0, SESSION_NAME_MAX - 1) + '…' : title;
+
 /** Shell command categories by calls, Other last. */
 const shellCategoryRows = (categories) =>
   ranked(categories, (c) => c.calls).sort((a, b) => (a[0] === OTHER_CATEGORY) - (b[0] === OTHER_CATEGORY));
@@ -193,7 +198,7 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   const hasSubRows = breakdown || shell;
   const isSession = report === 'session';
   const lead = isSession
-    ? [left('Session', 36), path('Project'), left('Last Activity')]
+    ? [left('Session', SESSION_NAME_MAX), path('Project'), left('Last Activity')]
     : [report === 'project' ? path('Project') : left(PERIOD[report].title)];
   // A session row is always one session, so the per-session columns only make
   // sense for the other reports. Per Session is filled on breakdown sub-rows.
@@ -233,7 +238,7 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   for (const b of buckets) {
     const models = ranked(b.models, (m) => m.totalTokens).map(([m]) => shortModel(m));
     const leadCells = isSession
-      ? [b.title ?? b.key.slice(0, 8), [...b.projects][0] ?? '', localTime(b.lastActivity, timeZone)]
+      ? [sessionName(b.title ?? b.key.slice(0, 8)), [...b.projects][0] ?? '', localTime(b.lastActivity, timeZone)]
       : [b.key];
     rows.push({
       cells: [
