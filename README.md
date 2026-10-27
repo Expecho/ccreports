@@ -1,6 +1,6 @@
 # ccreports
 
-Reports Claude Code (and [GitHub Copilot](#github-copilot)) **tool calls, skills, slash commands, subagents, token usage and cost** from
+Reports Claude Code (and [GitHub Copilot](#github-copilot) and [Cursor](#cursor)) **tool calls, skills, slash commands, subagents, token usage and cost** from
 the local session transcripts in `~/.claude/projects`. Inspired by
 [ccusage](https://github.com/ccusage/ccusage), which covers tokens and cost;
 ccreports adds what you actually *did* with those tokens.
@@ -199,8 +199,9 @@ byte order mark so Excel shows non-ASCII characters correctly.
 | `--no-subagents` | Exclude subagent transcripts |
 | `--compact` | Hide cache token columns (automatic below 120 columns) |
 | `--dir <path>` | Projects directory (repeatable). Default: `CLAUDE_CONFIG_DIR` (comma-separated) or `~/.claude` / `~/.config/claude` |
-| `--source <src>` | `claude` (default), `copilot` or `all` - see [GitHub Copilot](#github-copilot) |
+| `--source <src>` | `claude` (default), `copilot`, `cursor` or `all` - see [GitHub Copilot](#github-copilot) and [Cursor](#cursor) |
 | `--copilot-dir <path>` | Copilot session-state directory (repeatable). Default: `COPILOT_HOME` or `~/.copilot`, then `session-state` |
+| `--cursor-dir <path>` | Cursor config directory (repeatable). Default: `CURSOR_CONFIG_DIR` or `~/.cursor` |
 | `-v, --version` | Print the ccreports version. Reports name it too: in the HTML header line, as a footer in table and Markdown output, and as `ccreportsVersion` in JSON |
 
 ### GitHub Copilot
@@ -264,6 +265,53 @@ checks work differently for Copilot:
 
 With `--source all`, each product gets its own recommendations, weighed
 against its own cost, and in JSON every recommendation has a `source`.
+
+### Cursor
+
+`--source cursor` reports Cursor, from the agent transcripts in
+`~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl`. Both the
+Cursor CLI and the agent in the Cursor editor write them. `--source all`
+adds Cursor to Claude Code and GitHub Copilot.
+
+```sh
+node bin/ccreports.mjs --source cursor            # summary
+node bin/ccreports.mjs session --source cursor
+node bin/ccreports.mjs adoption --source cursor
+```
+
+**Activity only.** Cursor keeps token usage on its servers. Its local logs
+have no tokens, models or cost, so Cursor reports leave out those columns.
+In `--source all` reports, Cursor sessions count in sessions, tools, skills
+and adoption, but add nothing to tokens and cost.
+
+How the transcripts map onto the reports:
+
+- **Sessions and prompts:** one transcript per session. A prompt is a
+  message with a `<user_query>`. Cursor's own session metadata
+  (`~/.cursor/chats/…/meta.json`) marks a session as CLI and gives its title
+  and working directory. Sessions without it come from the editor.
+- **Time:** lines have no timestamps. Recent prompts carry one, and every
+  record gets the time of the prompt that started its turn. Older transcripts
+  without any use the file's modification time.
+- **Project:** the working directory from the CLI's metadata. Otherwise the
+  transcript's folder name (`Z-Sources-My-App`), decoded against the folders
+  that exist on disk. `(no folder)` is the editor without an open folder.
+- **Tools** keep Cursor's names (`Read`, `Shell`, `Write`, …). Tools called
+  through `CallDynamicTool` count under their own name; those outside
+  Cursor's namespace count as MCP tools (`mcp__<server>__<tool>`). `-x`
+  breaks down `Shell` commands. Edits are `Write`, `Edit`, `StrReplace`,
+  `MultiEdit` and `Delete`. `SwitchMode` and `CreatePlan` mark plan mode.
+- **Skills you invoke** come from the skill block Cursor attaches to your
+  message (`/github` in the CLI, or picked in the editor). **Skills the
+  agent uses** are `Read` calls on a `SKILL.md` in a skills folder Cursor
+  loads from, such as `.cursor/skills`, `.claude/skills` or `.agents/skills`.
+  A read made only to look at or edit a skill counts as a use too.
+- **Recommendations:** without tokens, only the workflow checks can fire:
+  coding step by step, and skills.
+- **Not available:** tokens, cost, models, context size, hooks, compactions,
+  subagents and pull requests. The transcripts don't record tool results, so
+  no PR links either. IDE chats from before Cursor wrote transcripts are
+  kept only in the editor's database and aren't read.
 
 ## What is counted
 

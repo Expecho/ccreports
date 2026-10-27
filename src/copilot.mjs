@@ -424,10 +424,11 @@ export function mergeData(...parts) {
     skills: [...first.skills],
     commands: [...first.commands],
     hooks: [...first.hooks],
+    events: [...(first.events ?? [])],
   };
   for (const p of rest) {
     out.files += p.files;
-    for (const k of ['usage', 'tools', 'skills', 'commands', 'hooks']) out[k].push(...p[k]);
+    for (const k of ['usage', 'tools', 'skills', 'commands', 'hooks', 'events']) out[k].push(...(p[k] ?? []));
     for (const [k, v] of p.sessions) out.sessions.set(k, v);
     for (const [k, v] of p.titles) out.titles.set(k, v);
   }

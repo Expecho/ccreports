@@ -52,7 +52,11 @@ const localTime = (timestamp, timeZone) =>
     minute: '2-digit',
   }).format(new Date(timestamp));
 
-function tokenColumns({ compact, showCost }) {
+// `tokens: false` (activity-only data, such as Cursor's) leaves out every token,
+// cost, context and request column.
+
+function tokenColumns({ compact, showCost, tokens }) {
+  if (tokens === false) return [];
   const cols = compact
     ? [right('Input'), right('Output'), right('Total Tokens')]
     : [right('Input'), right('Output'), right('Cache Create'), right('Cache Read'), right('Total Tokens')];
@@ -90,7 +94,8 @@ function exact(a) {
   };
 }
 
-function subTokenCells(u, { compact, showCost }) {
+function subTokenCells(u, { compact, showCost, tokens }) {
+  if (tokens === false) return [];
   const cells = !u
     ? (compact ? ['', '', ''] : ['', '', '', '', ''])
     : compact
@@ -100,7 +105,8 @@ function subTokenCells(u, { compact, showCost }) {
   return cells;
 }
 
-function tokenCells(b, { compact, showCost }) {
+function tokenCells(b, { compact, showCost, tokens }) {
+  if (tokens === false) return [];
   const cells = compact
     ? [b.inputTokens, b.outputTokens, b.totalTokens]
     : [b.inputTokens, b.outputTokens, b.cacheCreationTokens, b.cacheReadTokens, b.totalTokens];
@@ -193,16 +199,20 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   // sense for the other reports. Per Session is filled on breakdown sub-rows.
   const sessionColumns = isSession ? [] : [right('Sessions'), ...(hasSubRows ? [right('Per Session')] : [])];
   const sessionCells = (b) => (isSession ? [] : [b.sessions.size, ...(hasSubRows ? [''] : [])]);
+  const withTokens = opts.tokens !== false;
+  const contextCols = withTokens ? contextColumns(isSession) : [];
   const columns = [
     ...lead,
-    left('Models', 28),
+    ...(withTokens ? [left('Models', 28)] : []),
     ...tokenColumns(opts),
-    ...contextColumns(isSession),
+    ...contextCols,
     ...sessionColumns,
     ...COUNT_COLUMNS,
   ];
   const blankLead = lead.map(() => '');
-  const emptyContext = contextColumns(isSession).map(() => '');
+  const emptyContext = contextCols.map(() => '');
+  const modelCell = (text) => (withTokens ? [text] : []);
+  const contextOf = (b) => (withTokens ? contextCells(b, isSession) : []);
 
   // Sub-row: label in the first column, the item's tokens and cost under Total
   // Tokens / Cost, its count under Tools / Skills / Cmds / Agents, and the count
@@ -214,7 +224,7 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
     subLead[0] = label;
     const perSession = isSession ? [] : ['', average(count, b.sessions.size)];
     return {
-      cells: [...subLead, '', ...subTokenCells(usage, opts), ...emptyContext, ...perSession, ...counts],
+      cells: [...subLead, ...modelCell(''), ...subTokenCells(usage, opts), ...emptyContext, ...perSession, ...counts],
       style: 'sub',
     };
   };
@@ -228,9 +238,9 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
     rows.push({
       cells: [
         ...leadCells,
-        models.join(', '),
+        ...modelCell(models.join(', ')),
         ...tokenCells(b, opts),
-        ...contextCells(b, isSession),
+        ...contextOf(b),
         ...sessionCells(b),
         ...countCells(b),
       ],
@@ -263,9 +273,9 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   rows.push({
     cells: [
       ...totalLead,
-      '',
+      ...modelCell(''),
       ...tokenCells(totals, opts),
-      ...contextCells(totals, isSession),
+      ...contextOf(totals),
       ...sessionCells(totals),
       ...countCells(totals),
     ],
@@ -281,12 +291,12 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
 /** Summary: totals plus ranked tool / MCP / skill / command / subagent / model tables. */
 export function buildSummary({ totals }, opts) {
   const { top, showCost } = opts;
+  const withTokens = opts.tokens !== false;
   const sections = [
     {
       columns: [
         ...tokenColumns(opts),
-        ...contextColumns(false),
-        right('Requests'),
+        ...(withTokens ? [...contextColumns(false), right('Requests')] : []),
         right('Sessions'),
         right('Projects'),
         ...COUNT_COLUMNS,
@@ -295,8 +305,7 @@ export function buildSummary({ totals }, opts) {
         {
           cells: [
             ...tokenCells(totals, opts),
-            ...contextCells(totals, false),
-            totals.requests,
+            ...(withTokens ? [...contextCells(totals, false), totals.requests] : []),
             totals.sessions.size,
             totals.projects.size,
             ...countCells(totals),
@@ -317,14 +326,17 @@ export function buildSummary({ totals }, opts) {
 
   // Estimated tokens and cost attributed to each tool / server / skill: input
   // side (result in context + re-reads) and output (the input the model wrote).
-  const estCols = [
-    right('Input (est.)'),
-    right('Output (est.)'),
-    right('Tokens (est.)'),
-    ...(showCost ? [right('Cost (est.)')] : []),
-    right('Token share'),
-  ];
+  const estCols = withTokens
+    ? [
+        right('Input (est.)'),
+        right('Output (est.)'),
+        right('Tokens (est.)'),
+        ...(showCost ? [right('Cost (est.)')] : []),
+        right('Token share'),
+      ]
+    : [];
   const estCells = (usage) => {
+    if (!withTokens) return [];
     const u = usage ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
     return [
       approx(u.cacheWriteTokens + u.cacheReadTokens),
@@ -426,29 +438,34 @@ export function buildSummary({ totals }, opts) {
   if (totals.subagentLaunches > 0 || [...totals.agents.keys()].some((k) => k !== MAIN_AGENT)) {
     section(
       'Subagents',
-      [
-        left('Type'),
-        right('Launches'),
-        right('Requests'),
-        right('Tool calls'),
-        right('Input'),
-        right('Output'),
-        right('Total Tokens'),
-        ...costCol,
-        right('Token share'),
-      ],
-      ranked(totals.agents, (a) => a.totalTokens),
-      ([name, a]) => [
-        name,
-        name === MAIN_AGENT ? '' : a.launches,
-        a.requests,
-        a.toolCalls,
-        a.inputTokens + a.cacheCreationTokens + a.cacheReadTokens,
-        a.outputTokens,
-        a.totalTokens,
-        ...costCell(a.costUSD),
-        share(a.totalTokens, totals.totalTokens),
-      ],
+      withTokens
+        ? [
+            left('Type'),
+            right('Launches'),
+            right('Requests'),
+            right('Tool calls'),
+            right('Input'),
+            right('Output'),
+            right('Total Tokens'),
+            ...costCol,
+            right('Token share'),
+          ]
+        : [left('Type'), right('Launches'), right('Tool calls')],
+      ranked(totals.agents, (a) => (withTokens ? a.totalTokens : a.launches)),
+      ([name, a]) =>
+        withTokens
+          ? [
+              name,
+              name === MAIN_AGENT ? '' : a.launches,
+              a.requests,
+              a.toolCalls,
+              a.inputTokens + a.cacheCreationTokens + a.cacheReadTokens,
+              a.outputTokens,
+              a.totalTokens,
+              ...costCell(a.costUSD),
+              share(a.totalTokens, totals.totalTokens),
+            ]
+          : [name, name === MAIN_AGENT ? '' : a.launches, a.toolCalls],
     );
   }
 

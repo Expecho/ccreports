@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadRecords, defaultProjectDirs } from '../src/loader.mjs';
 import { loadCopilotRecords, defaultCopilotDirs, mergeData } from '../src/copilot.mjs';
+import { loadCursorRecords, defaultCursorDirs } from '../src/cursor.mjs';
 import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
@@ -15,7 +16,7 @@ import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 import { loadPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
 import { VERSION } from '../src/version.mjs';
 
-const HELP = `ccreports - Claude Code (and GitHub Copilot) tool, skill, slash-command and token usage
+const HELP = `ccreports - Claude Code (and GitHub Copilot, Cursor) tool, skill, slash-command and token usage
 
 Usage: ccreports [report] [options]
 
@@ -31,7 +32,8 @@ Reports:
   recommendations  Best-practice recommendations based on your usage, with the cost at stake
 
 Options:
-      --source <src>     claude (default), copilot (GitHub Copilot CLI / VS Code agent) or all
+      --source <src>     claude (default), copilot (GitHub Copilot CLI / VS Code agent),
+                         cursor (Cursor CLI / editor agent; activity only, no tokens) or all
   -s, --since <date>     Include from this date (YYYYMMDD or YYYY-MM-DD)
   -u, --until <date>     Include up to and including this date
   -p, --project <text>   Only projects whose path contains <text> (case-insensitive)
@@ -54,6 +56,7 @@ Options:
       --no-color         Disable colors (also honors NO_COLOR)
       --dir <path>       Projects directory to scan (repeatable; default from CLAUDE_CONFIG_DIR or ~/.claude)
       --copilot-dir <path>  Copilot session-state directory (repeatable; default from COPILOT_HOME or ~/.copilot)
+      --cursor-dir <path>   Cursor config directory (repeatable; default from CURSOR_CONFIG_DIR or ~/.cursor)
   -v, --version          Show the ccreports version
   -h, --help             Show this help
 `;
@@ -91,6 +94,7 @@ try {
       dir: { type: 'string', multiple: true },
       source: { type: 'string' },
       'copilot-dir': { type: 'string', multiple: true },
+      'cursor-dir': { type: 'string', multiple: true },
       version: { type: 'boolean', short: 'v' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -114,7 +118,7 @@ if (!REPORTS.includes(report)) fail(`unknown report "${report}". Expected one of
 if (positionals.length > 1) fail(`unexpected argument "${positionals[1]}"`);
 if (opts.order && !['asc', 'desc'].includes(opts.order)) fail('--order must be asc or desc');
 const source = (opts.source ?? 'claude').toLowerCase();
-if (!['claude', 'copilot', 'all'].includes(source)) fail('--source must be claude, copilot or all');
+if (!['claude', 'copilot', 'cursor', 'all'].includes(source)) fail('--source must be claude, copilot, cursor or all');
 
 let format = opts.json ? 'json' : (opts.format ?? 'table').toLowerCase();
 if (format === 'md') format = 'markdown';
@@ -147,16 +151,30 @@ const toTTY = !opts.output && !opts.open && process.stdout.isTTY;
 const includeSubagents = !opts['no-subagents'];
 const dirs = opts.dir?.length ? opts.dir : defaultProjectDirs();
 const copilotDirs = opts['copilot-dir']?.length ? opts['copilot-dir'] : defaultCopilotDirs();
-const claudeData = source !== 'copilot' ? await loadRecords({ dirs, includeSubagents }) : null;
-const copilotData = source !== 'claude' ? await loadCopilotRecords({ dirs: copilotDirs, includeSubagents }) : null;
-const data = claudeData && copilotData ? mergeData(claudeData, copilotData) : claudeData ?? copilotData;
+const cursorDirs = opts['cursor-dir']?.length ? opts['cursor-dir'] : defaultCursorDirs();
+const wants = (src) => source === src || source === 'all';
+const claudeData = wants('claude') ? await loadRecords({ dirs, includeSubagents }) : null;
+const copilotData = wants('copilot') ? await loadCopilotRecords({ dirs: copilotDirs, includeSubagents }) : null;
+const cursorData = wants('cursor') ? await loadCursorRecords({ dirs: cursorDirs, includeSubagents }) : null;
+const loaded = [claudeData, copilotData, cursorData].filter(Boolean);
+const data = loaded.length > 1 ? mergeData(...loaded) : loaded[0];
 if (data.files === 0) {
-  const scanned = [...(claudeData ? dirs : []), ...(copilotData ? copilotDirs : [])];
-  fail(`no ${source === 'copilot' ? 'sessions' : 'transcripts'} found in: ${scanned.join(', ')}`);
+  const scanned = [...(claudeData ? dirs : []), ...(copilotData ? copilotDirs : []), ...(cursorData ? cursorDirs : [])];
+  fail(`no ${source === 'claude' ? 'transcripts' : 'sessions'} found in: ${scanned.join(', ')}`);
 }
-const product = { claude: 'Claude Code', copilot: 'GitHub Copilot', all: 'Claude Code and GitHub Copilot' }[source];
+const product = {
+  claude: 'Claude Code',
+  copilot: 'GitHub Copilot',
+  cursor: 'Cursor',
+  all: 'Claude Code, GitHub Copilot and Cursor',
+}[source];
 
-const showCost = !opts['no-cost'];
+// Cursor logs no token usage: its own reports leave out cost, and combined
+// ones count its sessions in activity only.
+const showCost = !opts['no-cost'] && source !== 'cursor';
+if (source === 'all' && cursorData?.files) {
+  console.error('ccreports: Cursor logs no token usage; its sessions count in activity (prompts, tools, skills) only.');
+}
 let pricer, pricingSource;
 if (showCost) {
   const pricing = await loadPricingTable({ offline: opts.offline });
@@ -195,6 +213,8 @@ const docOpts = {
   pricer,
   plugins,
   product,
+  // No token usage at all (Cursor alone): reports leave out the token columns.
+  tokens: data.usage.length > 0,
 };
 
 // The adoption assessment and recommendations: their own reports, or appended
@@ -207,6 +227,7 @@ if (report === 'recommendations' || opts.recommendations) {
   const parts = [
     ['claude', claudeData],
     ['copilot', copilotData],
+    ['cursor', cursorData],
   ]
     .filter(([, d]) => d?.files)
     .map(([src, d]) => ({ src, doc: buildRecommendations(d, { ...docOpts, source: src }) }));
