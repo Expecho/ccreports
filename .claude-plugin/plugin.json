@@ -1,6 +1,6 @@
 {
   "name": "ccreports",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, hooks, subagents, tokens, cost, context size, an adoption assessment and recommendations",
   "author": {
     "name": "Peter Bons"
