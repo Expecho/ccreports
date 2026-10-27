@@ -1,6 +1,6 @@
 {
   "name": "ccreports",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size, an adoption assessment and recommendations",
   "keywords": [
     "claude",
