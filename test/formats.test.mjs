@@ -68,3 +68,10 @@ test('html: escapes content, adds sort values and share bars', () => {
   assert.match(flat, /<th class="left" data-sort>Tool<\/th>/);
   assert.match(out, /cost estimates at Claude API list prices/);
 });
+
+test('terminal, markdown and html name the ccreports version', () => {
+  assert.match(toTerminal(doc, { version: '9.9.9' }), /\nccreports 9\.9\.9$/);
+  assert.match(toMarkdown(doc, { version: '9.9.9' }), /\n_Generated with ccreports 9\.9\.9_\n$/);
+  assert.match(toHtml(doc, { generatedAt: new Date('2026-10-22T10:00:00Z'), version: '9.9.9' }), /Generated [\d-]+ [\d:]+ with ccreports 9\.9\.9/);
+  assert.doesNotMatch(toTerminal(doc), /ccreports/);
+});

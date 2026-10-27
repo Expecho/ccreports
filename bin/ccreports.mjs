@@ -12,6 +12,7 @@ import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 import { loadPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
+import { VERSION } from '../src/version.mjs';
 
 const HELP = `ccreports - Claude Code tool, skill, slash-command and token usage
 
@@ -50,6 +51,7 @@ Options:
       --compact          Hide cache token columns (table format)
       --no-color         Disable colors (also honors NO_COLOR)
       --dir <path>       Projects directory to scan (repeatable; default from CLAUDE_CONFIG_DIR or ~/.claude)
+  -v, --version          Show the ccreports version
   -h, --help             Show this help
 `;
 
@@ -84,6 +86,7 @@ try {
       compact: { type: 'boolean' },
       'no-color': { type: 'boolean' },
       dir: { type: 'string', multiple: true },
+      version: { type: 'boolean', short: 'v' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -94,6 +97,10 @@ try {
 const { values: opts, positionals } = parsed;
 if (opts.help) {
   process.stdout.write(HELP);
+  process.exit(0);
+}
+if (opts.version) {
+  process.stdout.write(`${VERSION}\n`);
   process.exit(0);
 }
 
@@ -180,7 +187,7 @@ const advice = report === 'recommendations' || opts.recommendations ? buildRecom
 
 let output;
 if (format === 'json') {
-  const meta = { report, since, until, pricingSource };
+  const meta = { report, since, until, pricingSource, ccreportsVersion: VERSION };
   const adoptionJson = adoption && {
     summary: adoption.summary,
     phases: PHASES,
@@ -211,10 +218,10 @@ if (format === 'json') {
     doc = { ...doc, summary: [...(doc.summary ?? []), ...part.summary], sections: [...doc.sections, ...part.sections] };
   }
   output = {
-    table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR }) + '\n',
-    markdown: () => toMarkdown(doc),
+    table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR, version: VERSION }) + '\n',
+    markdown: () => toMarkdown(doc, { version: VERSION }),
     csv: () => toCsv(doc),
-    html: () => toHtml(doc, { pricingSource }),
+    html: () => toHtml(doc, { pricingSource, version: VERSION }),
   }[format]();
 }
 

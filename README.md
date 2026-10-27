@@ -199,6 +199,7 @@ byte order mark so Excel shows non-ASCII characters correctly.
 | `--no-subagents` | Exclude subagent transcripts |
 | `--compact` | Hide cache token columns (automatic below 120 columns) |
 | `--dir <path>` | Projects directory (repeatable). Default: `CLAUDE_CONFIG_DIR` (comma-separated) or `~/.claude` / `~/.config/claude` |
+| `-v, --version` | Print the ccreports version. Reports name it too: in the HTML header line, as a footer in table and Markdown output, and as `ccreportsVersion` in JSON |
 
 ## What is counted
 

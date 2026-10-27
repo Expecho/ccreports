@@ -78,7 +78,7 @@ function terminalTable({ columns, rows }, c) {
   return out.join('\n');
 }
 
-export function toTerminal(doc, { color = false } = {}) {
+export function toTerminal(doc, { color = false, version } = {}) {
   const c = paint(color);
   const out = [c.bold(doc.title)];
   if (doc.summary?.length) out.push(...doc.summary.map((l) => `• ${l}`), '');
@@ -93,6 +93,7 @@ export function toTerminal(doc, { color = false } = {}) {
       out.push(terminalTable(s, c));
     }
   });
+  if (version) out.push('', c.dim(`ccreports ${version}`));
   return out.join('\n');
 }
 
@@ -115,7 +116,7 @@ function itemsTable(items) {
 
 const mdEscape = (s) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-export function toMarkdown(doc) {
+export function toMarkdown(doc, { version } = {}) {
   const out = [`# ${doc.title}`];
   if (doc.summary?.length) out.push('', ...doc.summary.map((l) => `- ${l}`));
   for (const s of doc.sections) {
@@ -139,6 +140,7 @@ export function toMarkdown(doc) {
       out.push(`| ${cells.join(' | ')} |`);
     }
   }
+  if (version) out.push('', `_Generated with ccreports ${version}_`);
   return out.join('\n') + '\n';
 }
 
@@ -246,8 +248,8 @@ function htmlCards({ columns, rows }) {
   return `<div class="cards">${cards.join('\n')}</div>`;
 }
 
-export function toHtml(doc, { generatedAt = new Date(), pricingSource } = {}) {
-  const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}`];
+export function toHtml(doc, { generatedAt = new Date(), pricingSource, version } = {}) {
+  const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}${version ? ` with ccreports ${version}` : ''}`];
   if (pricingSource) {
     meta.push(`cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
   }
