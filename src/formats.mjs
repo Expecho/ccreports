@@ -248,10 +248,11 @@ function htmlCards({ columns, rows }) {
   return `<div class="cards">${cards.join('\n')}</div>`;
 }
 
-export function toHtml(doc, { generatedAt = new Date(), pricingSource, version } = {}) {
+export function toHtml(doc, { generatedAt = new Date(), pricingSource, version, copilot = false } = {}) {
   const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}${version ? ` with ccreports ${version}` : ''}`];
+  if (copilot) meta.push('GitHub Copilot cost from its billed AI credits');
   if (pricingSource) {
-    meta.push(`cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
+    meta.push(`${copilot ? 'other ' : ''}cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
   }
   const sections = doc.sections
     .map((s) => {

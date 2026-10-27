@@ -101,8 +101,9 @@ export class FileAttribution {
       }
       const next = rs[k + 1];
       if (!next || r.human) continue;
+      // NaN when a request's context is unknown (Copilot logs without per-request usage).
       const delta = next.context - r.context - r.output;
-      if (delta <= 0) continue;
+      if (!(delta > 0)) continue;
       const weight = r.tools.reduce((s, t) => s + t.resultChars, 0);
       for (const t of r.tools) {
         t.measuredTokens = weight > 0 ? (delta * t.resultChars) / weight : delta / r.tools.length;
@@ -119,7 +120,7 @@ export class FileAttribution {
       const next = rs[at];
       item.model = next?.model ?? this.last?.model;
       item.cache1hShare = next?.cache1hShare ?? 0;
-      item.promptTokens = next?.context ?? 0;
+      item.promptTokens = next?.context || 0;
     }
     return this.items;
   }

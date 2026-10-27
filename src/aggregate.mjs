@@ -60,6 +60,7 @@ function newBucket(key) {
     totalTokens: 0,
     costUSD: 0,
     requests: 0,
+    premiumRequests: 0, // GitHub Copilot
     toolCalls: 0,
     skillCalls: 0,
     commandCount: 0,
@@ -138,7 +139,9 @@ function addUsage(entry, t, costUSD, f = 1) {
 
 /** Prices an attributed item: tool input as output, then cache writes and re-reads. */
 function attributedCost(t, pricer) {
-  if (!pricer || !t.model) return 0;
+  if (!pricer) return 0;
+  if (t.costUSD != null) return t.costUSD; // a share of billed GitHub Copilot cost
+  if (!t.model) return 0;
   return (
     pricer({
       model: t.model,
@@ -197,9 +200,12 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
     if (!buckets) continue;
     const total = rec.inputTokens + rec.outputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
     const context = rec.inputTokens + rec.cacheCreationTokens + rec.cacheReadTokens;
-    const cost = pricer?.(rec) ?? 0;
+    // Copilot records carry their billed cost; the rest are priced here.
+    const cost = pricer ? rec.costUSD ?? pricer(rec) ?? 0 : 0;
+    // A record summing several requests (Copilot without per-request usage) has no context size.
+    const requests = rec.requests ?? 1;
     for (const b of buckets) {
-      if (rec.agent == null) {
+      if (rec.agent == null && !rec.aggregated) {
         b.contextTokensSum += context;
         b.contextRequests += 1;
         if (context > (b.sessionPeaks.get(rec.sessionId) ?? 0)) b.sessionPeaks.set(rec.sessionId, context);
@@ -210,15 +216,16 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
       b.cacheReadTokens += rec.cacheReadTokens;
       b.totalTokens += total;
       b.costUSD += cost;
-      b.requests += 1;
-      if (pricer && !pricer.isPriced(rec.model)) b.unpricedModels.add(rec.model);
+      b.requests += requests;
+      b.premiumRequests += rec.premiumRequests ?? 0;
+      if (pricer && rec.costUSD == null && !pricer.isPriced(rec.model)) b.unpricedModels.add(rec.model);
       const m = b.models.get(rec.model) ?? { requests: 0, totalTokens: 0, costUSD: 0 };
-      m.requests += 1;
+      m.requests += requests;
       m.totalTokens += total;
       m.costUSD += cost;
       b.models.set(rec.model, m);
       const a = agentEntry(b, rec.agent);
-      a.requests += 1;
+      a.requests += requests;
       a.inputTokens += rec.inputTokens;
       a.outputTokens += rec.outputTokens;
       a.cacheCreationTokens += rec.cacheCreationTokens;

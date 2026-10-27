@@ -1,6 +1,6 @@
 ---
 name: report
-description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects) - tokens and estimated API cost, tool / skill / slash-command / hook / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, how to use Claude Code more effectively or cheaply, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
+description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects), and their GitHub Copilot CLI / VS Code agent usage (~/.copilot/session-state) - tokens and estimated API cost, tool / skill / slash-command / hook / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, how to use Claude Code or Copilot more effectively or cheaply, how their Claude Code and Copilot usage compare, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
 argument-hint: "[summary|daily|weekly|monthly|session|project|adoption|recommendations] [options]"
 ---
 
@@ -14,7 +14,7 @@ absolute path from the "Base directory for this skill" line, quoted:
 node "<base directory>/../../bin/ccreports.mjs" [report] [options]
 ```
 
-It only reads local transcripts; the one network call fetches Anthropic's public
+It only reads local session logs; the one network call fetches Anthropic's public
 pricing page for cost estimates (cached for a day; `--offline` skips it).
 
 ## Choosing the command
@@ -32,6 +32,8 @@ the request:
 | which programs / CLI commands Bash and PowerShell calls ran | add `-x` (`--shell`) to `summary` or a period report |
 | an adoption / maturity assessment | `adoption`, or `-a` to add it to another report |
 | advice: how to use Claude Code better or cheaper | `recommendations`, or `-r` to add it to another report |
+| the same for GitHub Copilot (CLI or VS Code agent) | any of the above with `--source copilot` |
+| Claude Code and Copilot together, or compared | any of the above with `--source all` (recommendations get a section per product) |
 
 Useful options: `-s/--since` and `-u/--until` (`YYYYMMDD`), `-p/--project <text>`,
 `-n/--top <n>`, `--compact`, `--no-cost`, `-f/--format table|json|csv|markdown|html`,
@@ -62,3 +64,14 @@ of every table. Keep these caveats in mind and mention them when relevant:
 - Context size counts the main conversation only.
 - The adoption phases are per session, from the user's own logs; PRs are those
   Claude Code created.
+
+With `--source copilot` or `all`, also keep in mind:
+
+- Copilot cost is what it billed in AI credits (1 AIU = $0.01); where nothing
+  was billed, Claude models are priced at API rates and other models (GPT,
+  local) show as unpriced. The summary also lists premium requests.
+- Older Copilot sessions only log totals per run at shutdown: no context size,
+  and subagent tokens are folded into the main session. Sessions that never
+  shut down cleanly have no token counts.
+- Copilot's tokens per tool are rougher than Claude Code's: they are scaled
+  down to at most what each session sent.

@@ -149,7 +149,8 @@ function candidates(model) {
   const plain = model.replace(/\[.*\]$/, ''); // "claude-opus-5-5[1m]"
   const undated = plain.replace(/-\d{8}$/, ''); // "claude-haiku-4-5-20251001"
   const legacy = undated.replace(/^claude-(\d+)-(\d+)-([a-z]+)$/, 'claude-$3-$1-$2'); // "claude-3-5-haiku"
-  return [...new Set([plain, undated, legacy])];
+  const dashed = undated.replace(/(\d)\.(\d)/g, '$1-$2'); // GitHub Copilot: "claude-sonnet-4.6"
+  return [...new Set([plain, undated, legacy, dashed])];
 }
 
 /**

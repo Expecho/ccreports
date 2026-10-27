@@ -32,6 +32,98 @@ const TOOL_ADVICE = {
 const DEFAULT_TOOL_ADVICE =
   'Its results are large: prefer tools or parameters that filter or page the results, lower `MAX_MCP_OUTPUT_TOKENS` (default 25,000) for MCP tools, or ask Claude to call it from a subagent so only a summary reaches your conversation.';
 
+// The same for GitHub Copilot's tools; what the user controls there: requests,
+// `.github/copilot-instructions.md` / `AGENTS.md`, custom agents, skills, MCP servers and hooks.
+const COPILOT_SHELL_ADVICE = (filters) =>
+  `Make the repo's test and build scripts quiet (only failures), and ask in \`.github/copilot-instructions.md\` (or \`AGENTS.md\`) for short command output (${filters}). Every line of output stays in the context and is re-sent with each later request.`;
+const COPILOT_SEARCH_ADVICE =
+  'Ask in `.github/copilot-instructions.md` for narrow searches (a folder or file type, listing matching files before reading matches), and note where things live so Copilot needs fewer searches. For broad questions, ask for the `explore` agent: it searches in its own context.';
+const COPILOT_EDIT_ADVICE =
+  'Patches stay in the context: ask Copilot to do sweeping rewrites in a subagent, so the main conversation only keeps the summary, and for large or repetitive files ask for a script that generates them instead of the files themselves.';
+const COPILOT_TOOL_ADVICE = {
+  powershell: COPILOT_SHELL_ADVICE('`Select-Object -First`, `Select-String`, quiet switches'),
+  bash: COPILOT_SHELL_ADVICE('`head`, `grep`, quiet flags'),
+  view: 'Note in `.github/copilot-instructions.md` where things live, so Copilot opens the right file without reading around it; split very large files; and ask for the `explore` agent for broad "find where…" questions, so the file contents stay out of your conversation.',
+  rg: COPILOT_SEARCH_ADVICE,
+  grep: COPILOT_SEARCH_ADVICE,
+  glob: COPILOT_SEARCH_ADVICE,
+  apply_patch: COPILOT_EDIT_ADVICE,
+  edit: COPILOT_EDIT_ADVICE,
+  create: COPILOT_EDIT_ADVICE,
+  task: 'A subagent\'s final message is what lands in your context: ask for short, structured answers (a list of findings, file paths) in your custom agents\' definitions (`.github/agents/<name>.agent.md`) and when you delegate to built-in ones.',
+  skill: TOOL_ADVICE.Skill,
+};
+const COPILOT_DEFAULT_TOOL_ADVICE =
+  'Its results are large: prefer tools or parameters that filter or page the results, turn off MCP servers you don\'t need for the task (`/mcp`), or ask Copilot to call it from a subagent so only a summary reaches your conversation.';
+
+// What differs per product: tool names and the advice, which names that product's own levers.
+const PRODUCTS = {
+  claude: {
+    name: 'Claude Code',
+    explorationTools: EXPLORATION_TOOLS,
+    toolAdvice: TOOL_ADVICE,
+    defaultToolAdvice: DEFAULT_TOOL_ADVICE,
+    subagentModel: true,
+    subagentTokens: true, // subagents' tokens are logged separately
+    worktrees: true,
+    advice: {
+      longContext:
+        'Start a new session, or `/clear`, when you switch tasks, and `/compact` with a hint of what to keep when a long task has to continue. Each request re-sends the whole context, so a turn at 400k tokens costs about ten times one at 40k.',
+      delegate:
+        'Ask Claude to use an Explore subagent for "find where…" and "how does … work" questions: it reads in its own context and returns a summary, so the file contents never stay in your main conversation.',
+      compaction:
+        'Compaction replaces the conversation with a summary and loses detail. Break big work into tasks that fit one session, `/clear` between them, or run `/compact` yourself at a natural break with instructions on what to keep.',
+      cache: {
+        expired:
+          'The main conversation\'s cache lasts 5 minutes with an API key or cloud provider and 1 hour on a Claude subscription; the `promptCacheTtl` setting (`5m` or `1h`) chooses it, and 1-hour cache writes cost more. Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt; `/usage` shows whether the cache is still warm.',
+        invalidated:
+          'A miss without a pause means the start of the prompt changed. With tool search on (the default on supported models) MCP servers connecting mid-session no longer do this; with it off, servers connecting or tools being removed mid-session do, so keep the tool set stable during a conversation.',
+        'model switch': 'Each model has its own cache: switching with `/model` mid-conversation re-reads the whole history. Pick the model at the start, or `/compact` before you switch.',
+      },
+      autonomy:
+        'Describe the whole task up front - goal, constraints and how to verify it - and let Claude run. Use plan mode for bigger changes, and turn workflows you repeat into skills.',
+      parallel:
+        'Ask Claude to run independent tasks as parallel subagents: they run in the background while you keep working (`Ctrl+B` moves a long-running one there). When several agents change code at the same time, give each its own worktree: `isolation: worktree` in an agent\'s definition, or `claude -w <name>` for a whole session.',
+      skills:
+        'Capture the instructions you keep repeating (how to test, release, review or plan in this repo) as a skill, so Claude follows them every time without you typing them out.',
+      hooks:
+        'A failing hook gives none of the protection it was added for. Use absolute paths (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/…`) so hooks still resolve when Claude works in a subfolder, check that the interpreter (python, node) is on PATH, and remove stale ones from the settings file that defines them (`/hooks` lists them, read-only).',
+    },
+  },
+  copilot: {
+    name: 'GitHub Copilot',
+    explorationTools: new Set(['view', 'grep', 'glob', 'rg']),
+    toolAdvice: COPILOT_TOOL_ADVICE,
+    defaultToolAdvice: COPILOT_DEFAULT_TOOL_ADVICE,
+    subagentTokens: false,
+    subagentModel: false, // Copilot bills by its own rates and multipliers, not Claude's
+    worktrees: false,
+    advice: {
+      longContext:
+        'Start a new session, or `/clear`, when you switch tasks, and `/compact` when a long task has to continue; `/context` shows what fills the context. Each request re-sends the whole context, so a turn at 400k tokens costs about ten times one at 40k.',
+      delegate:
+        'Ask Copilot to use the `explore` agent for "find where…" and "how does … work" questions: it reads in its own context and returns a summary, so the file contents never stay in your main conversation.',
+      compaction:
+        'Compaction replaces the conversation with a summary and loses detail. Break big work into tasks that fit one session, `/clear` between them, or run `/compact` yourself at a natural break.',
+      cache: {
+        expired:
+          'Copilot\'s prompt cache lasts only minutes without a request (your logs show a 5-minute lifetime). Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt.',
+        invalidated:
+          'A miss without a pause means the start of the prompt changed, for example when MCP servers or tools are added or removed mid-session: keep the tool set stable during a conversation.',
+        'model switch': 'Each model has its own cache: switching with `/model` mid-conversation re-reads the whole history. Pick the model at the start, or `/compact` before you switch.',
+      },
+      autonomy:
+        'Describe the whole task up front - goal, constraints and how to verify it - and let Copilot run. Use plan mode (`Shift+Tab`) for bigger changes and autopilot to let an approved plan run without check-ins, and turn workflows you repeat into skills.',
+      parallel:
+        'Ask Copilot to run independent tasks as background agents: they keep working while the conversation goes on, and Copilot collects their results when they finish.',
+      skills:
+        'Capture the instructions you keep repeating (how to test, release, review or plan in this repo) as a skill (`.github/skills/<name>/SKILL.md`, or `~/.copilot/skills` for all your projects), so Copilot follows them every time without you typing them out.',
+      hooks:
+        'A failing hook gives none of the protection it was added for, and a failing `preToolUse` hook also denies the tool call. Use absolute paths so hooks still resolve when Copilot works in a subfolder, check that the interpreter (python, node) is on PATH, and remove stale ones from the configuration that defines them.',
+    },
+  },
+};
+
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
 const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const pct = (v) => `${Math.round(v * 100)}%`;
@@ -48,7 +140,7 @@ const usd = (v) => `$${v.toFixed(2)}`;
 export function cacheMisses(usage, pricer) {
   const bySession = new Map();
   for (const r of usage) {
-    if (r.agent) continue; // subagents run without pauses
+    if (r.agent || r.aggregated) continue; // subagents run without pauses; totals of several requests have no context
     const list = bySession.get(r.sessionId) ?? [];
     list.push(r);
     bySession.set(r.sessionId, list);
@@ -90,12 +182,14 @@ export function cacheMisses(usage, pricer) {
  */
 export function recommend(data, opts = {}) {
   const { pricer } = opts;
+  const p = PRODUCTS[opts.source ?? 'claude'];
   const inRange = recordFilter(opts);
   const usage = data.usage.filter(inRange);
   if (!usage.length) return [];
   const { totals } = aggregate(data, { ...opts, report: 'summary' });
   const stats = sessionStats(data, opts);
-  const costOf = (rec) => (pricer ? pricer(rec) ?? 0 : 0);
+  // GitHub Copilot records carry their billed cost.
+  const costOf = (rec) => (pricer ? rec.costUSD ?? pricer(rec) ?? 0 : 0);
   const totalCost = totals.costUSD;
   const recs = [];
   // Money where we can price it, else a share of tokens.
@@ -106,6 +200,7 @@ export function recommend(data, opts = {}) {
     let longCost = 0;
     let longTokens = 0;
     for (const r of usage) {
+      if (r.aggregated) continue; // totals of several requests: no context size
       const context = r.inputTokens + r.cacheCreationTokens + r.cacheReadTokens;
       if (context > LONG_CONTEXT) {
         longCost += costOf(r);
@@ -122,8 +217,7 @@ export function recommend(data, opts = {}) {
         atStakeUSD: pricer ? longCost : null,
         atStakeTokens: longTokens,
         evidence: `${pct(share)} of your ${pricer ? 'cost' : 'tokens'} (${stake(longCost, longTokens)}) came from requests carrying more than ${tok(LONG_CONTEXT)} tokens of context; ${bigSessions} session${bigSessions === 1 ? '' : 's'} peaked above ${tok(PEAK_CONTEXT)} (largest ${tok(Math.max(...peaks))}).`,
-        advice:
-          'Start a new session, or `/clear`, when you switch tasks, and `/compact` with a hint of what to keep when a long task has to continue. Each request re-sends the whole context, so a turn at 400k tokens costs about ten times one at 40k.',
+        advice: p.advice.longContext,
       });
     }
   }
@@ -142,11 +236,11 @@ export function recommend(data, opts = {}) {
     const share = t.tokens / (totals.totalTokens || 1);
     recs.push({
       id: `heavy-tool:${name}`,
-      title: TOOL_ADVICE[name] ? `Trim what ${name} puts into the context` : `Rein in ${name}'s large results`,
+      title: p.toolAdvice[name] ? `Trim what ${name} puts into the context` : `Rein in ${name}'s large results`,
       atStakeUSD: pricer ? t.costUSD : null,
       atStakeTokens: t.tokens,
       evidence: `${name}: ${fmt(calls)} call${calls === 1 ? '' : 's'}, ~${tok(t.tokens)} tokens (${pct(share)} of all tokens${pricer ? `, ~${usd(t.costUSD)}` : ''}), ~${tok(t.tokens / calls)} per call including re-reads.`,
-      advice: TOOL_ADVICE[name] ?? DEFAULT_TOOL_ADVICE,
+      advice: p.toolAdvice[name] ?? p.defaultToolAdvice,
     });
   }
 
@@ -154,32 +248,40 @@ export function recommend(data, opts = {}) {
   {
     let tokens = 0;
     for (const t of data.tools) {
-      if (t.agent || !EXPLORATION_TOOLS.has(t.name) || !t.tokens || !inRange(t)) continue;
+      if (t.agent || !p.explorationTools.has(t.name) || !t.tokens || !inRange(t)) continue;
       tokens += t.tokens.total;
     }
     // The tool totals include subagents' calls; prorate their cost to the main conversation's share.
-    const exploreTotals = [...EXPLORATION_TOOLS].map((n) => totals.toolTokens.get(n)).filter(Boolean);
+    const exploreTotals = [...p.explorationTools].map((n) => totals.toolTokens.get(n)).filter(Boolean);
     const allTokens = exploreTotals.reduce((s, t) => s + t.tokens, 0);
     const allCost = exploreTotals.reduce((s, t) => s + t.costUSD, 0);
     const cost = allTokens ? (allCost * tokens) / allTokens : 0;
     const share = tokens / (totals.totalTokens || 1);
     const main = totals.agents.get(MAIN_AGENT)?.totalTokens ?? 0;
     const subagentShare = 1 - main / (totals.totalTokens || 1);
-    if (share >= 0.12 && subagentShare < 0.25) {
+    // Older Copilot logs count subagents' tokens as the main session's: there,
+    // subagent use is the share of sessions that launched one.
+    const delegating = p.subagentTokens
+      ? subagentShare
+      : stats.filter((s) => s.subagentLaunches > 0).length / (stats.length || 1);
+    if (share >= 0.12 && delegating < 0.25) {
       recs.push({
         id: 'delegate-exploration',
         title: 'Delegate codebase exploration to subagents',
         atStakeUSD: pricer ? cost : null,
         atStakeTokens: tokens,
-        evidence: `Reading and searching files in your main conversation took ~${tok(tokens)} tokens (${pct(share)} of all), while subagents handled ${pct(subagentShare)} of your tokens.`,
-        advice:
-          'Ask Claude to use an Explore subagent for "find where…" and "how does … work" questions: it reads in its own context and returns a summary, so the file contents never stay in your main conversation.',
+        evidence: `Reading and searching files in your main conversation took ~${tok(tokens)} tokens (${pct(share)} of all), while ${
+          p.subagentTokens
+            ? `subagents handled ${pct(subagentShare)} of your tokens`
+            : `${pct(delegating)} of your sessions launched a subagent (${fmt(totals.subagentLaunches)} launches)`
+        }.`,
+        advice: p.advice.delegate,
       });
     }
   }
 
   // 5. Subagents on a premium model: reprice their requests on Sonnet.
-  if (pricer) {
+  if (pricer && p.subagentModel) {
     const byType = new Map();
     for (const r of usage) {
       // Forks share the parent's context and model, so they can't run on another one.
@@ -216,8 +318,7 @@ export function recommend(data, opts = {}) {
         title: 'Split long tasks before the context fills up',
         atStakeUSD: null,
         evidence: `${compacted.length} of ${stats.length} sessions hit compaction (${count} time${count === 1 ? '' : 's'} in total).`,
-        advice:
-          'Compaction replaces the conversation with a summary and loses detail. Break big work into tasks that fit one session, `/clear` between them, or run `/compact` yourself at a natural break with instructions on what to keep.',
+        advice: p.advice.compaction,
       });
     }
   }
@@ -240,13 +341,7 @@ export function recommend(data, opts = {}) {
         invalidated: (c) => `${c.count} without a pause, when something early in the conversation changed`,
         'model switch': (c) => `${c.count} after a model switch`,
       };
-      const advice = {
-        expired:
-          'The main conversation\'s cache lasts 5 minutes with an API key or cloud provider and 1 hour on a Claude subscription; the `promptCacheTtl` setting (`5m` or `1h`) chooses it, and 1-hour cache writes cost more. Before you continue a large conversation after a break, `/compact` it (or `/clear` for unrelated work) so a smaller context is rebuilt; `/usage` shows whether the cache is still warm.',
-        invalidated:
-          'A miss without a pause means the start of the prompt changed. With tool search on (the default on supported models) MCP servers connecting mid-session no longer do this; with it off, servers connecting or tools being removed mid-session do, so keep the tool set stable during a conversation.',
-        'model switch': 'Each model has its own cache: switching with `/model` mid-conversation re-reads the whole history. Pick the model at the start, or `/compact` before you switch.',
-      };
+      const advice = p.advice.cache;
       const top = [...causes].sort((a, b) => b.extraUSD - a.extraUSD);
       recs.push({
         id: 'cache-rebuilds',
@@ -271,13 +366,17 @@ export function recommend(data, opts = {}) {
         return v.length ? v[Math.floor(v.length / 2)] : 0;
       };
       const agentic = coding.filter((s) => s.phase !== 'assisted');
+      // Copilot logs the modes a session ran in.
+      const modes = (mode) => coding.filter((s) => data.sessions.get(s.id)?.modes?.has(mode)).length;
+      const modeText = data.sessions.get(coding[0].id)?.modes
+        ? ` Plan mode was used in ${modes('plan')} and autopilot in ${modes('autopilot')} of ${coding.length} coding sessions.`
+        : '';
       recs.push({
         id: 'autonomy',
         title: 'Hand over whole tasks',
         atStakeUSD: null,
-        evidence: `${pct(assisted.length / coding.length)} of your coding sessions are step by step (median ${median(assisted).toFixed(1)} tool calls per prompt${agentic.length ? `, against ${median(agentic).toFixed(1)} in agent-first sessions` : ''}).`,
-        advice:
-          'Describe the whole task up front - goal, constraints and how to verify it - and let Claude run. Use plan mode for bigger changes, and turn workflows you repeat into skills.',
+        evidence: `${pct(assisted.length / coding.length)} of your coding sessions are step by step (median ${median(assisted).toFixed(1)} tool calls per prompt${agentic.length ? `, against ${median(agentic).toFixed(1)} in agent-first sessions` : ''}).${modeText}`,
+        advice: p.advice.autonomy,
       });
     }
   }
@@ -287,14 +386,15 @@ export function recommend(data, opts = {}) {
     const share = (f) => stats.filter(f).length / stats.length;
     const background = share((s) => s.backgroundAgents > 0);
     const worktrees = share((s) => s.worktrees > 0);
-    if (background < 0.1 && worktrees < 0.1) {
+    if (background < 0.1 && (!p.worktrees || worktrees < 0.1)) {
       recs.push({
         id: 'parallel',
         title: 'Run independent work in parallel',
         atStakeUSD: null,
-        evidence: `Background agents appear in ${pct(background)} and worktrees in ${pct(worktrees)} of your sessions.`,
-        advice:
-          'Ask Claude to run independent tasks as parallel subagents: they run in the background while you keep working (`Ctrl+B` moves a long-running one there). When several agents change code at the same time, give each its own worktree: `isolation: worktree` in an agent\'s definition, or `claude -w <name>` for a whole session.',
+        evidence: p.worktrees
+          ? `Background agents appear in ${pct(background)} and worktrees in ${pct(worktrees)} of your sessions.`
+          : `Background agents appear in ${pct(background)} of your sessions.`,
+        advice: p.advice.parallel,
       });
     }
     const skills = share((s) => s.skills > 0);
@@ -304,8 +404,7 @@ export function recommend(data, opts = {}) {
         title: 'Turn recurring workflows into skills',
         atStakeUSD: null,
         evidence: `Skills were used in ${pct(skills)} of your sessions.`,
-        advice:
-          'Capture the instructions you keep repeating (how to test, release, review or plan in this repo) as a skill, so Claude follows them every time without you typing them out.',
+        advice: p.advice.skills,
       });
     }
   }
@@ -326,8 +425,7 @@ export function recommend(data, opts = {}) {
         title: 'Fix or remove hooks that keep failing',
         atStakeUSD: null,
         evidence: `${failing.length} hook${failing.length === 1 ? '' : 's'} failed ${fmt(errors)} times (${Math.round(seconds)}s spent): ${shown.join('; ')}${failing.length > 3 ? '; …' : ''}.`,
-        advice:
-          'A failing hook gives none of the protection it was added for. Use absolute paths (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/…`) so hooks still resolve when Claude works in a subfolder, check that the interpreter (python, node) is on PATH, and remove stale ones from the settings file that defines them (`/hooks` lists them, read-only).',
+        advice: p.advice.hooks,
       });
     }
   }
@@ -351,7 +449,7 @@ export function buildRecommendations(data, opts) {
   const items = recommend(data, opts);
   const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
   return {
-    title: `Claude Code recommendations${range}`,
+    title: `${PRODUCTS[opts.source ?? 'claude'].name} recommendations${range}`,
     summary: items.length ? [] : ['No clear improvement found in this period - your usage already follows the patterns checked.'],
     sections: items.length
       ? [{ title: 'Recommendations', note: 'most impact first; amounts at stake overlap', items }]
