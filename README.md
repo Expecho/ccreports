@@ -22,6 +22,10 @@ npx ccreports@latest --source copilot                 # GitHub Copilot instead (
 
 Or install it globally: `npm install -g ccreports`, then run `ccreports`.
 
+See [example-output.html](example-output.html) for an example HTML report: per-session usage
+across Claude Code, GitHub Copilot and Cursor, with adoption and recommendations
+(session titles and project paths anonymized).
+
 ## Install as a Claude Code plugin
 
 At the prompt of a Claude Code terminal session:
