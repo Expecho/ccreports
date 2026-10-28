@@ -1,7 +1,7 @@
 {
   "name": "ccreports",
   "version": "0.5.2",
-  "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, hooks, subagents, tokens, cost, context size, an adoption assessment and recommendations",
+  "description": "Reports Claude Code, GitHub Copilot and Cursor usage from your local session logs: tools, skills, slash commands, hooks, subagents, tokens, cost, context size, an adoption assessment and recommendations",
   "author": {
     "name": "Peter Bons"
   },
@@ -13,6 +13,8 @@
     "tokens",
     "cost",
     "reports",
-    "adoption"
+    "adoption",
+    "github-copilot",
+    "cursor"
   ]
 }

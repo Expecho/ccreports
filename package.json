@@ -1,11 +1,14 @@
 {
   "name": "ccreports",
   "version": "0.5.2",
-  "description": "Reports Claude Code usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size, an adoption assessment and recommendations",
+  "description": "Reports Claude Code, GitHub Copilot and Cursor usage from your local session logs: tools, skills, slash commands, subagents, tokens, cost, context size, an adoption assessment and recommendations",
   "keywords": [
     "claude",
     "claude-code",
     "anthropic",
+    "github-copilot",
+    "copilot",
+    "cursor",
     "usage",
     "tokens",
     "cost",
