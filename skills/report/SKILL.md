@@ -25,6 +25,7 @@ the request:
 | The user wants | Command |
 |---|---|
 | an overview, totals, top tools / skills / commands / hooks / models | `summary` (default) |
+| how often they hit a usage limit (5-hour, weekly, Copilot quota) | `summary`, or `daily` / `weekly` for when; `-j` for each hit |
 | which plugins are installed (version, enabled) and whether they're used | any report (its *Installed plugins* table), e.g. `summary` |
 | a trend over time | `daily`, `weekly` or `monthly` |
 | per conversation or per repository | `session` or `project` |
@@ -63,6 +64,9 @@ of every table. Keep these caveats in mind and mention them when relevant:
 - Tokens per tool / skill (shown with `~`) are reconstructed from context growth
   and include re-reads of the result in later requests; subagent tokens are exact.
 - Context size counts the main conversation only.
+- Usage limits (the *Usage limits* table, `usageLimits` in JSON) count the times
+  a plan's 5-hour, weekly or spend limit, or Copilot's premium request quota or
+  rate limit, stopped a session. The table only appears when one was hit.
 - The adoption phases are per session, from the user's own logs; PRs are those
   Claude Code created.
 

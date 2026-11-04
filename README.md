@@ -428,6 +428,18 @@ sections above.
   `.meta.json`), next to a `(main session)` row; *Launches* counts `Agent`
   tool calls by requested `subagent_type`. The *Agents* column in period
   reports is the number of launches.
+- **Usage limits** – the error message Claude Code writes when a plan's usage
+  limit stops a request (`isApiErrorMessage`, `error: "rate_limit"`,
+  `apiError: "usage_limit_reached"`), deduplicated by uuid. The limit type
+  (5-hour, weekly, weekly Opus / Sonnet, extra usage) and reset time come from
+  its `rate_limit_info`, or from the message text in versions that don't log
+  them; older versions' `Claude AI usage limit reached|<reset>` and team or
+  enterprise spend limits count too. Short capacity 429s that Claude Code
+  retries on its own (`apiErrorIsTransient`) are not usage limits. When a limit
+  was hit, the summary and period reports add a *Usage limits* table (hits,
+  sessions, last hit, median time to reset) and a summary line; JSON output
+  always has `usageLimits`. For Copilot: `session.error` events of type
+  `quota` (premium requests used up) and `rate_limit`. Cursor logs no errors.
 - **Cost** – estimated per request at Claude API list prices, parsed from
   Anthropic's [pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
   and cached for 24h in `%LOCALAPPDATA%\ccreports` / `~/.cache/ccreports`;
