@@ -9,6 +9,7 @@ import { loadCursorRecords, defaultCursorDirs } from '../src/cursor.mjs';
 import { defaultCursorUserDirs } from '../src/cursor-state.mjs';
 import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
+import { coverage, methodSection } from '../src/method.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
 import { buildAdoption, buildIntents, parseIntents, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
@@ -284,9 +285,13 @@ const usageLimits = ['adoption', 'recommendations'].includes(report)
   ? null
   : limitStats(data, { since, until, project: opts.project, timeZone: opts.timezone });
 
+// The period the data covers: first to last activity within the filters.
+const range = coverage(result.totals, { timeZone: opts.timezone });
+
 let output;
 if (format === 'json') {
   const meta = { report, source, since, until, pricingSource, ccreportsVersion: VERSION };
+  if (range) meta.coverage = { from: range.from, to: range.to, days: range.days };
   const adoptionJson = adoption && {
     summary: adoption.summary,
     phases: PHASES,
@@ -332,6 +337,28 @@ if (format === 'json') {
     if (!part || part === doc) continue;
     doc = { ...doc, summary: [...(doc.summary ?? []), ...part.summary], sections: [...doc.sections, ...part.sections] };
   }
+  // A page to read: how it is measured, then the period table (per session,
+  // day, ...) at the bottom, below the overview sections.
+  const tail = [];
+  if (format === 'html') {
+    const has = {
+      claude: !!claudeData?.files,
+      copilot: !!copilotData?.files,
+      cursor: !!cursorData?.files,
+      cost: showCost,
+      breakdown: report === 'summary' || !!opts.breakdown,
+      shell: opts.shell,
+      adoption: !!adoption,
+      intentsByClaude: !!intents,
+      recommendations: !!advice,
+    };
+    tail.push(methodSection(has, { since, until, project: opts.project, timeZone: opts.timezone, pricingSource, range }));
+  }
+  doc = {
+    ...doc,
+    coverage: range,
+    sections: [...doc.sections.filter((s) => !s.main), ...tail, ...doc.sections.filter((s) => s.main)],
+  };
   output = {
     table: () => toTerminal(doc, { color: toTTY && !opts['no-color'] && !process.env.NO_COLOR, version: VERSION }) + '\n',
     markdown: () => toMarkdown(doc, { version: VERSION }),

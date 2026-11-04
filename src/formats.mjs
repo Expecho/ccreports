@@ -81,10 +81,13 @@ function terminalTable({ columns, rows }, c) {
 export function toTerminal(doc, { color = false, version } = {}) {
   const c = paint(color);
   const out = [c.bold(doc.title)];
+  if (doc.coverage) out.push(c.dim(`Data: ${doc.coverage.text}`));
   if (doc.summary?.length) out.push(...doc.summary.map((l) => `• ${l}`), '');
   doc.sections.forEach((s, i) => {
     if (s.title) out.push((i > 0 ? '\n' : '') + c.bold(s.title) + (s.note ? c.dim(`  (${s.note})`) : ''));
-    if (s.items) {
+    if (s.notes) {
+      for (const note of s.notes) out.push('', `${c.bold(note.term)}: ${note.text}`);
+    } else if (s.items) {
       s.items.forEach((item, n) => {
         out.push('', `${n + 1}. ${c.bold(item.title)}  ${c.dim(`[${itemImpact(item)}]`)}`);
         out.push(`   ${c.dim('Evidence:')} ${item.evidence}`, `   ${c.cyan('→')} ${item.advice}`);
@@ -118,10 +121,15 @@ const mdEscape = (s) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/
 
 export function toMarkdown(doc, { version } = {}) {
   const out = [`# ${doc.title}`];
+  if (doc.coverage) out.push('', `_Data: ${doc.coverage.text}_`);
   if (doc.summary?.length) out.push('', ...doc.summary.map((l) => `- ${l}`));
   for (const s of doc.sections) {
     out.push('');
     if (s.title) out.push(`## ${s.title}${s.note ? ` _(${s.note})_` : ''}`, '');
+    if (s.notes) {
+      for (const note of s.notes) out.push(`- **${note.term}:** ${note.text}`);
+      continue;
+    }
     if (s.items) {
       s.items.forEach((item, n) => {
         out.push(`### ${n + 1}. ${item.title}`, '', `_${itemImpact(item)}_`, '', `**Evidence:** ${item.evidence}`, '', `**Do:** ${item.advice}`, '');
@@ -154,7 +162,7 @@ const csvField = (s) => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
  */
 export function toCsv(doc) {
   return (
-    doc.sections
+    [...doc.sections.filter((s) => s.main), ...doc.sections.filter((s) => !s.main && !s.notes)]
       .map((section) => {
         const s = section.items ? itemsTable(section.items) : section;
         const lines = [s.columns.map((col) => csvField(col.title)).join(',')];
@@ -257,6 +265,8 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource, version, 
   const sections = doc.sections
     .map((s) => {
       const heading = s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
+      if (s.notes) return `<section class="method">${heading}
+<dl>${s.notes.map((n) => `<dt>${esc(n.term)}</dt><dd>${escCode(n.text)}</dd>`).join('')}</dl></section>`;
       if (s.items) return `<section class="plain">${heading}\n${htmlItems(s.items)}</section>`;
       return s.cards ? `<section class="plain">${heading}\n${htmlCards(s)}</section>` : `<section>${heading}\n${htmlTable(s)}</section>`;
     })
@@ -281,7 +291,7 @@ body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui
 /* The page grows to its widest table: one horizontal scrollbar for the page, not one per table. */
 main { padding:24px 16px 48px; width:fit-content; min-width:100%; }
 /* Text stays at window width when the page is wider. */
-.meta, .summary, section.plain { max-width:calc(100vw - 32px); }
+.meta, .summary, section.plain, section.method { max-width:calc(100vw - 32px); }
 h1 { font-size:22px; margin:0 0 4px; }
 .meta { color:var(--muted); margin:0 0 20px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 16px; }
@@ -290,6 +300,10 @@ h2 { font-size:15px; margin:0 0 10px; }
 .summary { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px; margin:0 0 16px; padding:12px 16px 12px 34px; }
 .summary li { margin:3px 0; }
 section.plain { background:none; border:0; padding:0; }
+.meta strong { color:var(--fg); font-weight:600; }
+section.method dl { display:grid; grid-template-columns:minmax(140px, max-content) 1fr; gap:8px 16px; margin:0; }
+section.method dt { font-weight:600; } section.method dd { margin:0; color:var(--muted); }
+@media (max-width:640px) { section.method dl { grid-template-columns:1fr; gap:2px; } section.method dd { margin-bottom:8px; } }
 .recs { list-style:none; margin:0; padding:0; display:grid; gap:10px; }
 .rec { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--muted); border-radius:10px; padding:12px 16px; }
 .rec.high { border-left-color:#dc2626; } .rec.medium { border-left-color:#d97706; } .rec.low { border-left-color:var(--accent); }
@@ -334,7 +348,7 @@ tbody tr:not(.total):hover td { background-color:var(--bar); }
 <body>
 <main>
 <h1>${esc(doc.title)}</h1>
-<p class="meta">${esc(meta.join(' · '))}</p>
+<p class="meta">${doc.coverage ? `<strong>Data: ${esc(doc.coverage.text)}</strong> · ` : ''}${esc(meta.join(' · '))}</p>
 ${summary}${sections}
 </main>
 <script>

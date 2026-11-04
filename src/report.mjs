@@ -145,11 +145,11 @@ function rangeText({ since, until }) {
 }
 
 const PERIOD = {
-  daily: { title: 'Date', name: 'daily' },
-  weekly: { title: 'Week', name: 'weekly' },
-  monthly: { title: 'Month', name: 'monthly' },
-  session: { title: 'Session', name: 'per-session' },
-  project: { title: 'Project', name: 'per-project' },
+  daily: { title: 'Date', name: 'daily', rows: 'Usage per day' },
+  weekly: { title: 'Week', name: 'weekly', rows: 'Usage per week' },
+  monthly: { title: 'Month', name: 'monthly', rows: 'Usage per month' },
+  session: { title: 'Session', name: 'per-session', rows: 'Usage per session' },
+  project: { title: 'Project', name: 'per-project', rows: 'Usage per project' },
 };
 
 /** daily / weekly / monthly / session / project report. */
@@ -334,7 +334,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   return {
     title: `${opts.product ?? 'Claude Code'} ${PERIOD[report].name} usage${rangeText(opts)}`,
     // All skills: --top limits the per-row breakdown, not this list.
-    sections: [{ columns, rows }, skillSection(totals, opts), ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])].filter(
+    // The period table is the report's own (`main`): the CLI moves it below the
+    // other sections in documents, CSV keeps it first.
+    sections: [
+      { title: PERIOD[report].rows, note: hasSubRows ? 'click a row for its breakdown' : undefined, main: true, columns, rows },
+      skillSection(totals, opts),
+      ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : []),
+    ].filter(
       Boolean,
     ),
   };
