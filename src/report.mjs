@@ -157,10 +157,13 @@ const PERIOD = {
 // their skills, commands, subagents, MCP servers and hooks were used.
 function pluginSection(plugins) {
   const yesNo = (v) => (v == null ? '' : v ? 'yes' : 'no');
+  // A Product column only when the plugins come from more than one product.
+  const multi = new Set(plugins.map((p) => p.product)).size > 1;
   return {
     title: 'Installed plugins',
     note: 'usage is per plugin, across its installs',
     columns: [
+      ...(multi ? [left('Product')] : []),
       left('Plugin'),
       left('Marketplace'),
       left('Version'),
@@ -176,6 +179,7 @@ function pluginSection(plugins) {
     ],
     rows: plugins.map((p) => ({
       cells: [
+        ...(multi ? [p.product] : []),
         p.name,
         p.marketplace,
         p.version,
@@ -189,6 +193,46 @@ function pluginSection(plugins) {
         p.usage.mcpCalls,
         p.usage.hookRuns,
       ],
+    })),
+  };
+}
+
+// Estimated tokens and cost attributed to each tool / server / skill: input
+// side (result in context + re-reads) and output (the input the model wrote).
+function estimateColumns(opts) {
+  if (opts.tokens === false) return [];
+  return [
+    right('Input (est.)'),
+    right('Output (est.)'),
+    right('Tokens (est.)'),
+    ...(opts.showCost ? [right('Cost (est.)')] : []),
+    right('Token share'),
+  ];
+}
+
+function estimateCells(usage, totals, opts) {
+  if (opts.tokens === false) return [];
+  const u = usage ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
+  return [
+    approx(u.cacheWriteTokens + u.cacheReadTokens),
+    approx(u.outputTokens),
+    approx(u.tokens),
+    ...(opts.showCost ? [money(u.costUSD, { approx: true })] : []),
+    share(u.tokens, totals.totalTokens),
+  ];
+}
+
+/** Every skill used, by who invoked it; `top` > 0 keeps the first rows. */
+function skillSection(totals, opts, top = 0) {
+  const entries = ranked(totals.skills, (s) => s.model + s.user);
+  if (!entries.length) return null;
+  const shown = top > 0 ? entries.slice(0, top) : entries;
+  return {
+    title: 'Skills',
+    note: shown.length < entries.length ? `top ${shown.length} of ${entries.length}` : undefined,
+    columns: [left('Skill'), right('By model'), right('By user'), right('Total'), ...estimateColumns(opts)],
+    rows: shown.map(([name, s]) => ({
+      cells: [name, s.model, s.user, s.model + s.user, ...estimateCells(totals.skillTokens.get(name), totals, opts)],
     })),
   };
 }
@@ -289,7 +333,10 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
 
   return {
     title: `${opts.product ?? 'Claude Code'} ${PERIOD[report].name} usage${rangeText(opts)}`,
-    sections: [{ columns, rows }, ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])],
+    // All skills: --top limits the per-row breakdown, not this list.
+    sections: [{ columns, rows }, skillSection(totals, opts), ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])].filter(
+      Boolean,
+    ),
   };
 }
 
@@ -329,28 +376,8 @@ export function buildSummary({ totals }, opts) {
   const costCol = showCost ? [right('Cost (USD)')] : [];
   const costCell = (v) => (showCost ? [money(v)] : []);
 
-  // Estimated tokens and cost attributed to each tool / server / skill: input
-  // side (result in context + re-reads) and output (the input the model wrote).
-  const estCols = withTokens
-    ? [
-        right('Input (est.)'),
-        right('Output (est.)'),
-        right('Tokens (est.)'),
-        ...(showCost ? [right('Cost (est.)')] : []),
-        right('Token share'),
-      ]
-    : [];
-  const estCells = (usage) => {
-    if (!withTokens) return [];
-    const u = usage ?? { tokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUSD: 0 };
-    return [
-      approx(u.cacheWriteTokens + u.cacheReadTokens),
-      approx(u.outputTokens),
-      approx(u.tokens),
-      ...(showCost ? [money(u.costUSD, { approx: true })] : []),
-      share(u.tokens, totals.totalTokens),
-    ];
-  };
+  const estCols = estimateColumns(opts);
+  const estCells = (usage) => estimateCells(usage, totals, opts);
 
   section(
     'Tools',
@@ -366,12 +393,8 @@ export function buildSummary({ totals }, opts) {
     ([name, count]) => [name, count, ...estCells(totals.mcpServerTokens.get(name))],
   );
 
-  section(
-    'Skills',
-    [left('Skill'), right('By model'), right('By user'), right('Total'), ...estCols],
-    ranked(totals.skills, (s) => s.model + s.user),
-    ([name, s]) => [name, s.model, s.user, s.model + s.user, ...estCells(totals.skillTokens.get(name))],
-  );
+  const skills = skillSection(totals, opts, top);
+  if (skills) sections.push(skills);
 
   // Programs run by Bash / PowerShell calls, grouped by purpose. Calls and
   // Share (of that tool's calls) count a call once per purpose.
