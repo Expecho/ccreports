@@ -17,6 +17,8 @@ test('workMessages reads commit messages and PR titles in any quoting', () => {
 test('promptText drops the tags around commands and attachments', () => {
   assert.equal(promptText('<command-name>/fix-bug</command-name>\n<command-args>login fails</command-args>'), '/fix-bug login fails');
   assert.equal(promptText('<system-reminder>ignore</system-reminder>  why   is it slow?'), 'why is it slow?');
+  assert.equal(promptText('<command-name>/clear</command-name>\n<command-args></command-args>'), '');
+  assert.equal(promptText('/compact'), '');
 });
 
 test('fileKind tells plans, docs, tests, ops and code apart', () => {
@@ -43,6 +45,7 @@ test('classifyIntent: commits outrank branches, titles and prompts', () => {
   assert.equal(intent({ branches: ['main'], title: 'Login button does not work' }), 'bugfix');
   assert.equal(intent({ title: 'Rename the services and clean up' }), 'refactor');
   assert.equal(intent({ commands: ['/code-review'] }), 'review');
+  assert.equal(intent({ firstPrompt: 'create a tool that generates an html file per repo' }), 'feature');
   assert.equal(intent({ title: 'Adoption cohorts plan mode', firstPrompt: 'add plan mode to the report' }), 'feature');
 });
 

@@ -3,7 +3,7 @@
 // compared on PRs, tokens and cost. Built as a report document (src/report.mjs).
 
 import { aggregate } from './aggregate.mjs';
-import { money, share, average } from './report.mjs';
+import { money, share, average, sessionName } from './report.mjs';
 import { INTENTS, classifyIntent, fileKind } from './intent.mjs';
 
 export const PHASES = [
@@ -56,7 +56,7 @@ const FEATURES = [
 ];
 
 /** Per-session stats for the sessions active in the selected range. */
-export function sessionStats(data, { since, until, project, timeZone, pricer } = {}) {
+export function sessionStats(data, { since, until, project, timeZone, pricer, intents, withSignals = false } = {}) {
   const { buckets } = aggregate(data, { report: 'session', since, until, project, timeZone, pricer });
   const inRange = new Set(buckets.map((b) => b.key));
   const counts = new Map();
@@ -110,18 +110,22 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
     const ch = changed.get(b.key);
     const files = { code: 0, tests: 0, docs: 0, ops: 0, plans: 0 };
     for (const f of ch?.files ?? []) files[fileKind(f)] += 1;
-    const { intent, evidence } = classifyIntent({
-      title: data.titles?.get(b.key),
-      firstPrompt: info?.firstPrompt,
+    const signals = {
+      title: data.titles?.get(b.key) ?? null,
+      firstPrompt: info?.firstPrompt ?? null,
       branches: [...(info?.branches ?? [])],
       workMessages: [...(info?.workMessages?.values() ?? [])].flat(),
       commands: commandsBySession.get(b.key) ?? [],
       files,
       newFiles: ch?.newFiles.size ?? 0,
       edits: s.edits,
-    });
-    s.intent = intent;
-    s.intentEvidence = evidence;
+    };
+    const { intent, evidence } = classifyIntent(signals);
+    // An intent Claude assigned (--intents) replaces the rules' guess.
+    const assigned = intents?.get(b.key);
+    s.intent = assigned ?? intent;
+    s.intentEvidence = assigned ? ['claude'] : evidence;
+    if (withSignals) s.intentSignals = { ...signals, ruleIntent: intent, ruleEvidence: evidence };
     return s;
   });
 }
@@ -302,7 +306,7 @@ export function buildAdoption(data, opts) {
       },
       {
         title: 'Session intent',
-        note: 'what sessions were for, from commits, titles, branches, prompts and changed files',
+        note: intentNote(stats),
         columns: [
           left('Intent'),
           left('What'),
@@ -314,6 +318,68 @@ export function buildAdoption(data, opts) {
           ...(showCost ? [right('Cost per session')] : []),
         ],
         rows: intentRows,
+      },
+    ],
+    stats,
+  };
+}
+
+function intentNote(stats) {
+  const byClaude = stats.filter((s) => s.intentEvidence?.includes('claude')).length;
+  if (!byClaude) return 'what sessions were for, from commits, titles, branches, prompts and changed files';
+  if (byClaude === stats.length) return 'what sessions were for, as classified by Claude';
+  return `what sessions were for: ${byClaude} of ${stats.length} classified by Claude, the rest by rules`;
+}
+
+/**
+ * Intents assigned outside ccreports (by Claude, through the skill), from JSON:
+ * { "<session id>": "<intent>" }, [{ id, intent }] or { sessions: [{ id, intent }] }.
+ * Intents are keys or titles from INTENTS. Returns { intents: Map, unknown: [values] }.
+ */
+export function parseIntents(json) {
+  const byName = new Map(INTENTS.flatMap((i) => [[i.key, i.key], [i.title.toLowerCase(), i.key]]));
+  const list = Array.isArray(json)
+    ? json
+    : Array.isArray(json?.sessions)
+      ? json.sessions
+      : Object.entries(json ?? {}).map(([id, intent]) => ({ id, intent }));
+  const intents = new Map();
+  const unknown = [];
+  for (const { id, intent } of list) {
+    const key = byName.get(String(intent ?? '').trim().toLowerCase());
+    if (id && key) intents.set(id, key);
+    else if (id) unknown.push(String(intent));
+  }
+  return { intents, unknown };
+}
+
+/**
+ * The `intents` report: one row per session with its intent and the evidence.
+ * In JSON (see bin) each session also carries the signals, for Claude to classify.
+ */
+export function buildIntents(data, opts) {
+  const stats = sessionStats(data, { ...opts, withSignals: true });
+  const title = (key) => INTENTS.find((i) => i.key === key)?.title ?? key;
+  const sorted = [...stats].sort((a, b) => (a.firstActivity < b.firstActivity ? -1 : 1));
+  const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
+  return {
+    title: `${opts.product ?? 'Claude Code'} session intent${range}`,
+    summary: [],
+    sections: [
+      {
+        title: 'Sessions',
+        note: intentNote(stats),
+        columns: [left('Session'), left('Started'), left('Intent'), left('Evidence'), right('Edits'), right('PRs')],
+        rows: sorted.map((s) => ({
+          cells: [
+            sessionName(s.title ?? s.id.slice(0, 8)),
+            String(s.firstActivity).slice(0, 10),
+            title(s.intent),
+            s.intentEvidence.join(', '),
+            s.edits,
+            s.prs,
+          ],
+        })),
       },
     ],
     stats,

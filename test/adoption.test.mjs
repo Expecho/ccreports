@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, buildAdoption, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { classify, buildAdoption, buildIntents, parseIntents, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { toHtml, toMarkdown } from '../src/formats.mjs';
 
 const stats = (over) => ({
@@ -99,6 +99,33 @@ test('buildAdoption: session intent per session and as a section', () => {
   const section = doc.sections.find((s) => s.title === 'Session intent');
   assert.deepEqual(section.rows.map((r) => r.cells[0]), ['Bug fix', 'New development', 'Refactoring', 'Research & analysis']);
   assert.ok(doc.summary.some((l) => l.startsWith('By intent: bug fix 25%')));
+});
+
+test('parseIntents accepts a map, a list or { sessions }, keys or titles', () => {
+  const { intents, unknown } = parseIntents({ a: 'bugfix', b: 'New development', c: 'banana' });
+  assert.deepEqual([...intents], [['a', 'bugfix'], ['b', 'feature']]);
+  assert.deepEqual(unknown, ['banana']);
+  assert.deepEqual([...parseIntents([{ id: 'x', intent: 'Research & analysis' }]).intents], [['x', 'research']]);
+  assert.deepEqual([...parseIntents({ sessions: [{ id: 'y', intent: 'ops' }] }).intents], [['y', 'ops']]);
+});
+
+test('intents assigned by Claude replace the rules, in adoption and the intents report', () => {
+  const data = fixture();
+  data.sessions.get('assist').branches = new Set(['fix/login']);
+  const intents = new Map([['assist', 'refactor']]);
+  const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false, intents });
+  const assist = doc.stats.find((s) => s.id === 'assist');
+  assert.equal(assist.intent, 'refactor');
+  assert.deepEqual(assist.intentEvidence, ['claude']);
+  assert.equal(assist.intentSignals, undefined); // signals only in the intents report
+  assert.match(doc.sections.find((s) => s.title === 'Session intent').note, /1 of 4 classified by Claude/);
+
+  const report = buildIntents(data, { timeZone: 'UTC', showCost: false, intents });
+  const row = report.sections[0].rows.find((r) => r.cells[2] === 'Refactoring').cells;
+  assert.equal(row[3], 'claude');
+  const signals = report.stats.find((s) => s.id === 'assist').intentSignals;
+  assert.equal(signals.ruleIntent, 'bugfix');
+  assert.deepEqual(signals.branches, ['fix/login']);
 });
 
 test('adoption renders as cards in HTML and as tables in Markdown', () => {

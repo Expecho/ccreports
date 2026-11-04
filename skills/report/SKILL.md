@@ -1,7 +1,7 @@
 ---
 name: report
-description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects), their GitHub Copilot CLI / VS Code agent usage (~/.copilot/session-state), and their Cursor CLI / editor agent activity (~/.cursor/projects) - tokens and estimated API cost, tool / skill / slash-command / hook / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, how to use Claude Code, Copilot or Cursor more effectively or cheaply, how their usage of these tools compares, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
-argument-hint: "[summary|daily|weekly|monthly|session|project|adoption|recommendations] [options]"
+description: Report the user's own Claude Code usage from their local session logs (~/.claude/projects), their GitHub Copilot CLI / VS Code agent usage (~/.copilot/session-state), and their Cursor CLI / editor agent activity (~/.cursor/projects) - tokens and estimated API cost, tool / skill / slash-command / hook / subagent counts and the tokens each consumed, context size, sessions, an adoption assessment (chat, assisted, agent-first, multi-agent), what each session was for (bug fix, new development, refactoring, research, ...) and best-practice recommendations backed by their data. Use when the user asks how much they used or spent, which tools or skills they use most, what consumes their tokens, how their usage trends per day/week/month/project/session, how far they have adopted agentic workflows, what they spend their sessions on, how to use Claude Code, Copilot or Cursor more effectively or cheaply, how their usage of these tools compares, or wants such a report as a table, Markdown, CSV, JSON or HTML page.
+argument-hint: "[summary|daily|weekly|monthly|session|project|adoption|intents|recommendations] [options]"
 ---
 
 # ccreports
@@ -31,7 +31,7 @@ the request:
 | what each tool, skill or subagent consumed | add `-b` (breakdown) to a period report |
 | which programs / CLI commands Bash and PowerShell calls ran | add `-x` (`--shell`) to `summary` or a period report |
 | an adoption / maturity assessment | `adoption`, or `-a` to add it to another report |
-| what sessions were for (bug fixes, features, refactoring, research, ...) | `adoption` (its Session intent section) |
+| what sessions were for (bug fixes, features, refactoring, research, ...) | `adoption` (its Session intent section), or `intents` per session; classify them yourself, see [Classifying session intent](#classifying-session-intent) |
 | advice: how to use Claude Code better or cheaper | `recommendations`, or `-r` to add it to another report |
 | the same for GitHub Copilot (CLI or VS Code agent) | any of the above with `--source copilot` |
 | the same for Cursor (CLI or editor agent; activity only, no tokens or cost) | any of the above with `--source cursor` |
@@ -54,6 +54,43 @@ Useful options: `-s/--since` and `-u/--until` (`YYYYMMDD`), `-p/--project <text>
   not open files unless `--open` is passed.
 - If Node.js is missing or older than 20, say so; don't install it for them.
 
+## Classifying session intent
+
+ccreports guesses each session's intent with rules. When the user asks what
+their sessions were for, or asks for intent to be classified by Claude, classify
+the sessions yourself instead; it is more accurate than the rules. For an
+adoption report where intent is not the question, the rules are enough.
+
+1. Export the signals, with the same `--source`, `-s`, `-u` and `-p` options as
+   the report, to a temporary file (your scratchpad directory if you have one):
+
+   ```sh
+   node "<base directory>/../../bin/ccreports.mjs" intents -j --no-open -o "<tmp>/ccreports-intent-signals.json" [options]
+   ```
+
+   With more than about 200 sessions, narrow the range with `--since` or ask
+   the user which period to classify.
+2. Read the file. `intents` lists the keys to choose from. Each session has a
+   `title` and `signals`: `firstPrompt`, `branches`, `workMessages` (commit
+   messages and PR titles it wrote), `commands`, `files` (changed files per
+   kind: code, tests, docs, ops, plans), `newFiles`, `edits`, and the rules'
+   guess (`ruleIntent`, `ruleEvidence`). Pick one key per session for its main
+   purpose:
+   - Commits and PR titles are the strongest evidence, then the title and the
+     first prompt, then the branch (a long-lived `feature/` branch also hosts
+     fixes).
+   - A session that changed nothing is research, even if it talks about a bug.
+   - Keep `ruleIntent` when the signals don't point elsewhere; use `other` only
+     when nothing hints at a purpose.
+3. Write `{ "<session id>": "<key>", ... }` to `<tmp>/ccreports-intents.json`.
+4. Run the report the user asked for with `--intents "<tmp>/ccreports-intents.json"`,
+   e.g. `adoption --intents …` or `intents --intents …` (not `-j`, which would
+   print the prompts again). The section notes how many sessions you classified;
+   their evidence reads `claude`.
+
+The signals hold the user's own prompts from their local logs. Use them only to
+classify; don't quote them in the report or the answer unless asked.
+
 ## Explaining the results
 
 Lead with what stands out (biggest cost driver, trend, phase), not a restatement
@@ -68,7 +105,8 @@ of every table. Keep these caveats in mind and mention them when relevant:
   Claude Code created.
 - Session intent (bug fix, new development, refactoring, ...) comes from rules
   over commit messages, titles, branch names, the first prompt and the files
-  changed. It is a best guess per session; `--json` shows the evidence.
+  changed, unless you classified it. Either way it is a best guess per session;
+  `intents` shows the evidence.
 
 With `--source copilot`, `cursor` or `all`, also keep in mind:
 

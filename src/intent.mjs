@@ -24,7 +24,7 @@ const KEYWORDS = {
   bugfix:
     /\b(bugs?|bugfix|fix(es|ed|ing)?|hotfix|errors?|exceptions?|crash(es|ed|ing)?|broken|breaks|fails?|failing|failed|failure|not working|(does ?n[o']t|did ?n[o']t|is ?n[o']t|wo ?n[o']t) (work|show|load|run|start|give|return)|no output|wrong|incorrect|regression|stack ?trace|debug(ging)?|repro|fout(en|melding)?|werkt niet|kapot)\b/i,
   feature:
-    /\b(add(s|ed|ing)?|implement(s|ed|ing)?|build|new (feature|page|app|application|endpoint|command|option|screen|tool|report)|i want (an?|to have)|support for|introduce|scaffold|make me|features?|improv(e|es|ed|ing|ements?)|enhanc(e|es|ed|ing|ements?)|poc|prototype|toevoegen|bouw)\b/i,
+    /\b(add(s|ed|ing)?|implement(s|ed|ing)?|build|new (feature|page|app|application|endpoint|command|option|screen|tool|report)|(create|write|make) (a|an) (new )?(tool|app|application|script|page|site|website|service|api|cli|bot|dashboard|component|generator|plugin|extension)|i want (an?|to have)|support for|introduce|scaffold|make me|features?|improv(e|es|ed|ing|ements?)|enhanc(e|es|ed|ing|ements?)|poc|prototype|toevoegen|bouw)\b/i,
   refactor:
     /\b(refactor(s|ed|ing)?|renam(e|es|ed|ing)|clean(ing)? ?up|simplif(y|ies|ied|ication)|restructur(e|ing)|extract|reorgani[sz](e|ing)|migrat(e|es|ed|ing|ion)|upgrad(e|es|ed|ing)|moderni[sz]e|dedup(licate)?|split (up|into)|consolidat(e|ing)|opschonen|herschrijf)\b/i,
   tests: /\b(unit[- ]?tests?|tests?|testing|test (case|suite)s?|coverage|e2e|playwright|jest|vitest|xunit|nunit|pytest)\b/i,
@@ -54,12 +54,16 @@ export function workMessages(command) {
   return out;
 }
 
-/** What a prompt says, without the tags Claude Code wraps around commands and attachments. */
+/**
+ * What a prompt says, without the tags Claude Code wraps around commands and
+ * attachments. A bare slash command (/clear, /compact) says nothing: ''.
+ */
 export function promptText(text) {
   const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1];
   const name = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1];
   const plain = name ? `${name} ${args ?? ''}` : String(text ?? '').replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, ' ');
-  return plain.replace(/\s+/g, ' ').trim().slice(0, 500);
+  const clean = plain.replace(/\s+/g, ' ').trim();
+  return /^\/\S+$/.test(clean) ? '' : clean.slice(0, 500);
 }
 
 /** A changed file's kind: plans (plan / spec documents), docs, tests, ops (CI, containers, settings, manifests) or code. */

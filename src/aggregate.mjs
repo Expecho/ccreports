@@ -5,7 +5,7 @@ import { commandCategory } from './shell.mjs';
 
 const QUIET_CATEGORY = 'Change directory';
 
-export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption', 'recommendations'];
+export const REPORTS = ['summary', 'daily', 'weekly', 'monthly', 'session', 'project', 'adoption', 'intents', 'recommendations'];
 
 export function dateFormatter(timeZone) {
   // en-CA formats as YYYY-MM-DD.
