@@ -88,6 +88,34 @@ test('loads and deduplicates records', async () => {
   }
 });
 
+test('records the signals for session intent: branch, first prompt, commits, changed files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  try {
+    const proj = path.join(root, '-work-app');
+    await mkdir(proj, { recursive: true });
+    const lines = [
+      { ...user('2026-10-01T10:00:00Z', 'u1', 'the login button does not work'), gitBranch: 'fix/login' },
+      { ...user('2026-10-01T10:00:01Z', 'u2', 'and the logout one'), gitBranch: 'HEAD' },
+      assistant('2026-10-01T10:00:05Z', 'm1', 'r1', [
+        { type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: '/work/app/a.js' } },
+        { type: 'tool_use', id: 't2', name: 'Write', input: { file_path: '/work/app/b.js', content: '' } },
+        { type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'git commit -m "fix: login button"' } },
+      ]),
+    ];
+    await writeFile(path.join(proj, 's1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const data = await loadRecords({ dirs: [root] });
+    const info = data.sessions.get('s1');
+    assert.deepEqual([...info.branches], ['fix/login']);
+    assert.equal(info.firstPrompt, 'the login button does not work');
+    assert.deepEqual([...info.workMessages.values()], [['fix: login button']]);
+    const byName = Object.fromEntries(data.tools.map((t) => [t.name, t]));
+    assert.deepEqual(byName.Edit.editFiles, ['/work/app/a.js']);
+    assert.equal(byName.Write.writeFile, '/work/app/b.js');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a session keeps the project it started in', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
   try {

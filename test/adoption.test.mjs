@@ -85,6 +85,22 @@ test('buildAdoption: cohorts, weekly mix, capabilities, surfaces and summary', (
   assert.ok(doc.summary.some((l) => l.includes('Not used in this period') && l.includes('worktrees')));
 });
 
+test('buildAdoption: session intent per session and as a section', () => {
+  const data = fixture();
+  data.sessions.get('assist').branches = new Set(['fix/login']);
+  data.sessions.get('agent').workMessages = new Map([['t', ['feat: new page']]]);
+  data.sessions.get('multi').firstPrompt = 'rename the services';
+  const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false });
+  assert.deepEqual(
+    Object.fromEntries(doc.stats.map((s) => [s.id, s.intent])),
+    { chat: 'research', assist: 'bugfix', agent: 'feature', multi: 'refactor' },
+  );
+  assert.deepEqual(doc.stats.find((s) => s.id === 'agent').intentEvidence, ['commit']);
+  const section = doc.sections.find((s) => s.title === 'Session intent');
+  assert.deepEqual(section.rows.map((r) => r.cells[0]), ['Bug fix', 'New development', 'Refactoring', 'Research & analysis']);
+  assert.ok(doc.summary.some((l) => l.startsWith('By intent: bug fix 25%')));
+});
+
 test('adoption renders as cards in HTML and as tables in Markdown', () => {
   const doc = buildAdoption(fixture(), { timeZone: 'UTC', showCost: false });
   const html = toHtml(doc);

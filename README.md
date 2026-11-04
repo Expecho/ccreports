@@ -129,7 +129,21 @@ session; the phase mix per week; how many sessions use each capability
 surface (CLI, desktop, IDE, SDK, and the Copilot and Cursor surfaces with
 `--source`). PRs are the `pr-link` entries Claude Code
 records when it creates a PR; prompts exclude agent-to-agent messages and
-task notifications. `--json` returns the per-session stats and phase.
+task notifications. `--json` returns the per-session stats, phase and intent.
+
+It closes with **session intent**, what each session was for: bug fix, new
+development, refactoring, tests, planning & design, docs & content, ops &
+config, review, research & analysis, or other. The intent comes from rules,
+not a model, and the strongest signal wins:
+
+1. conventional commit messages and PR titles the session wrote (`fix:`, `feat:`, `refactor:`, `docs:`, `chore:`, ...),
+2. review commands (`/code-review`, `/review`, `/security-review`),
+3. words in the session title, then the git branch prefix (`fix/`, `feature/`, ...), then the first prompt,
+4. what it changed: only plan / spec documents, docs, tests or CI and config files; mostly new files; or nothing at all (research).
+
+Each session in `--json` carries its `intent` and the `intentEvidence` that
+decided it. Prompts themselves are not in the report. Cursor logs no git
+branch.
 
 ```sh
 node bin/ccreports.mjs adoption -s 20261001 -f html -o adoption.html

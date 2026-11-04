@@ -31,6 +31,7 @@ the request:
 | what each tool, skill or subagent consumed | add `-b` (breakdown) to a period report |
 | which programs / CLI commands Bash and PowerShell calls ran | add `-x` (`--shell`) to `summary` or a period report |
 | an adoption / maturity assessment | `adoption`, or `-a` to add it to another report |
+| what sessions were for (bug fixes, features, refactoring, research, ...) | `adoption` (its Session intent section) |
 | advice: how to use Claude Code better or cheaper | `recommendations`, or `-r` to add it to another report |
 | the same for GitHub Copilot (CLI or VS Code agent) | any of the above with `--source copilot` |
 | the same for Cursor (CLI or editor agent; activity only, no tokens or cost) | any of the above with `--source cursor` |
@@ -65,6 +66,9 @@ of every table. Keep these caveats in mind and mention them when relevant:
 - Context size counts the main conversation only.
 - The adoption phases are per session, from the user's own logs; PRs are those
   Claude Code created.
+- Session intent (bug fix, new development, refactoring, ...) comes from rules
+  over commit messages, titles, branch names, the first prompt and the files
+  changed. It is a best guess per session; `--json` shows the evidence.
 
 With `--source copilot`, `cursor` or `all`, also keep in mind:
 
