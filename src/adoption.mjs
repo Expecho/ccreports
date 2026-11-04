@@ -3,7 +3,8 @@
 // compared on PRs, tokens and cost. Built as a report document (src/report.mjs).
 
 import { aggregate } from './aggregate.mjs';
-import { money, share, average } from './report.mjs';
+import { money, share, average, sessionName } from './report.mjs';
+import { INTENTS, classifyIntent, fileKind } from './intent.mjs';
 
 export const PHASES = [
   { key: 'chat', title: 'Chat', description: 'Questions and exploration, no code changes' },
@@ -15,6 +16,7 @@ export const PHASES = [
 // Tool calls per prompt you typed at which a session counts as agent-first.
 export const AUTONOMY_THRESHOLD = 10;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const samePath = (p) => String(p).replace(/\\/g, '/').toLowerCase();
 // Modes that run without asking per tool call: Claude Code's auto mode, Copilot's autopilot.
 const AUTO_MODES = ['auto', 'autopilot'];
 
@@ -60,12 +62,22 @@ const FEATURES = [
 ];
 
 /** Per-session stats for the sessions active in the selected range. */
-export function sessionStats(data, { since, until, project, timeZone, pricer } = {}) {
+export function sessionStats(data, { since, until, project, timeZone, pricer, intents, withSignals = false } = {}) {
   const { buckets } = aggregate(data, { report: 'session', since, until, project, timeZone, pricer });
   const inRange = new Set(buckets.map((b) => b.key));
   const counts = new Map();
+  const changed = new Map(); // sessionId -> { files: Set<path>, newFiles: Set<path> }
   for (const t of data.tools) {
     if (!inRange.has(t.sessionId)) continue;
+    if (t.editFiles || t.writeFile) {
+      const ch = changed.get(t.sessionId) ?? { files: new Set(), newFiles: new Set() };
+      for (const f of t.editFiles ?? []) ch.files.add(samePath(f));
+      if (t.writeFile) {
+        ch.files.add(samePath(t.writeFile));
+        ch.newFiles.add(samePath(t.writeFile));
+      }
+      changed.set(t.sessionId, ch);
+    }
     const c = counts.get(t.sessionId) ?? { edits: 0, backgroundAgents: 0, worktrees: 0, agentMessages: 0, mcpCalls: 0, webCalls: 0 };
     // edit / web: flags set by the GitHub Copilot loader, whose tools have other names.
     if (EDIT_TOOLS.has(t.name) || t.edit) c.edits += 1;
@@ -75,6 +87,11 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
     if (t.name.startsWith('mcp__')) c.mcpCalls += 1;
     if (t.name === 'WebSearch' || t.name === 'WebFetch' || t.web) c.webCalls += 1;
     counts.set(t.sessionId, c);
+  }
+  const commandsBySession = new Map();
+  for (const c of data.commands ?? []) {
+    if (!inRange.has(c.sessionId)) continue;
+    commandsBySession.set(c.sessionId, [...(commandsBySession.get(c.sessionId) ?? []), c.name]);
   }
   return buckets.map((b) => {
     const info = data.sessions.get(b.key);
@@ -101,6 +118,32 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
     };
     s.toolCallsPerPrompt = s.toolCalls / Math.max(s.prompts, 1);
     s.phase = classify(s);
+    const ch = changed.get(b.key);
+    const files = { code: 0, tests: 0, docs: 0, ops: 0, plans: 0 };
+    for (const f of ch?.files ?? []) files[fileKind(f)] += 1;
+    const signals = {
+      title: data.titles?.get(b.key) ?? null,
+      firstPrompt: info?.firstPrompt ?? null,
+      branches: [...(info?.branches ?? [])],
+      workMessages: [...(info?.workMessages?.values() ?? [])].flat(),
+      commands: commandsBySession.get(b.key) ?? [],
+      files,
+      newFiles: ch?.newFiles.size ?? 0,
+      edits: s.edits,
+    };
+    const { intent, evidence } = classifyIntent(signals);
+    // An intent Claude assigned (--intents) replaces the rules' guess.
+    const assigned = intents?.get(b.key);
+    s.intent = assigned ?? intent;
+    s.intentEvidence = assigned ? ['claude'] : evidence;
+    if (withSignals) {
+      // Every prompt typed in the session, in order (resumed copies counted once).
+      const prompts = [...(info?.promptTexts?.values() ?? [])]
+        .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
+        .map((p) => p.text);
+      const { firstPrompt, ...rest } = signals;
+      s.intentSignals = { ...rest, prompts: prompts.length ? prompts : firstPrompt ? [firstPrompt] : [], ruleIntent: intent, ruleEvidence: evidence };
+    }
     return s;
   });
 }
@@ -256,10 +299,30 @@ export function buildAdoption(data, opts) {
     return { cells: [label, n, share(n, logged ? stats.filter(logged).length : stats.length)] };
   });
 
+  // What sessions were for: one row per intent seen, the most common first, Other last.
+  const byIntent = INTENTS.map((i) => ({ ...i, list: stats.filter((s) => s.intent === i.key) }))
+    .filter((i) => i.list.length)
+    .sort((a, b) => (a.key === 'other') - (b.key === 'other') || b.list.length - a.list.length);
+  const intentRows = byIntent.map(({ title, description, list }) => ({
+    cells: [
+      title,
+      description,
+      list.length,
+      share(list.length, stats.length),
+      sum(list, (s) => s.prs),
+      average(sum(list, (s) => s.edits), list.length),
+      ...(opts.tokens !== false ? [Math.round(sum(list, (s) => s.totalTokens) / list.length)] : []),
+      ...(showCost ? [money(sum(list, (s) => s.costUSD) / list.length)] : []),
+    ],
+  }));
+  const summary = assess(stats, byPhase, features);
+  const named = byIntent.filter((i) => i.key !== 'other').slice(0, 3);
+  if (named.length) summary.push(`By intent: ${named.map((i) => `${i.title.toLowerCase()} ${pct(i.list.length / stats.length)}`).join(', ')}.`);
+
   const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
   return {
     title: `${opts.product ?? 'Claude Code'} adoption${range}`,
-    summary: assess(stats, byPhase, features),
+    summary,
     sections: [
       { title: 'Adoption cohorts', note: `sessions by how they used ${opts.product ?? 'Claude Code'}`, cards: true, columns: cohortColumns, rows: cohortRows },
       {
@@ -285,6 +348,83 @@ export function buildAdoption(data, opts) {
         title: 'Usage by surface',
         columns: [left('Surface'), right('Sessions'), right('Share of sessions'), right('PRs')],
         rows: surfaceRows,
+      },
+      {
+        title: 'Session intent',
+        note: intentNote(stats),
+        columns: [
+          left('Intent'),
+          left('What'),
+          right('Sessions'),
+          right('Share of sessions'),
+          right('PRs'),
+          right('Edits per session'),
+          ...(opts.tokens !== false ? [right('Tokens per session')] : []),
+          ...(showCost ? [right('Cost per session')] : []),
+        ],
+        rows: intentRows,
+      },
+    ],
+    stats,
+  };
+}
+
+function intentNote(stats) {
+  const byClaude = stats.filter((s) => s.intentEvidence?.includes('claude')).length;
+  if (!byClaude) return 'what sessions were for, from commits, titles, branches, prompts and changed files';
+  if (byClaude === stats.length) return 'what sessions were for, as classified by Claude';
+  return `what sessions were for: ${byClaude} of ${stats.length} classified by Claude, the rest by rules`;
+}
+
+/**
+ * Intents assigned outside ccreports (by Claude, through the skill), from JSON:
+ * { "<session id>": "<intent>" }, [{ id, intent }] or { sessions: [{ id, intent }] }.
+ * Intents are keys or titles from INTENTS. Returns { intents: Map, unknown: [values] }.
+ */
+export function parseIntents(json) {
+  const byName = new Map(INTENTS.flatMap((i) => [[i.key, i.key], [i.title.toLowerCase(), i.key]]));
+  const list = Array.isArray(json)
+    ? json
+    : Array.isArray(json?.sessions)
+      ? json.sessions
+      : Object.entries(json ?? {}).map(([id, intent]) => ({ id, intent }));
+  const intents = new Map();
+  const unknown = [];
+  for (const { id, intent } of list) {
+    const key = byName.get(String(intent ?? '').trim().toLowerCase());
+    if (id && key) intents.set(id, key);
+    else if (id) unknown.push(String(intent));
+  }
+  return { intents, unknown };
+}
+
+/**
+ * The `intents` report: one row per session with its intent and the evidence.
+ * In JSON (see bin) each session also carries the signals, for Claude to classify.
+ */
+export function buildIntents(data, opts) {
+  const stats = sessionStats(data, { ...opts, withSignals: true });
+  const title = (key) => INTENTS.find((i) => i.key === key)?.title ?? key;
+  const sorted = [...stats].sort((a, b) => (a.firstActivity < b.firstActivity ? -1 : 1));
+  const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
+  return {
+    title: `${opts.product ?? 'Claude Code'} session intent${range}`,
+    summary: [],
+    sections: [
+      {
+        title: 'Sessions',
+        note: intentNote(stats),
+        columns: [left('Session'), left('Started'), left('Intent'), left('Evidence'), right('Edits'), right('PRs')],
+        rows: sorted.map((s) => ({
+          cells: [
+            sessionName(s.title ?? s.id.slice(0, 8)),
+            String(s.firstActivity).slice(0, 10),
+            title(s.intent),
+            s.intentEvidence.join(', '),
+            s.edits,
+            s.prs,
+          ],
+        })),
       },
     ],
     stats,

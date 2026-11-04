@@ -12,12 +12,25 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
 import { SHELL_TOOLS, shellCommands } from './shell.mjs';
+import { promptText, workMessages } from './intent.mjs';
 import { claudeLimit } from './limits.mjs';
 
 const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
 const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
 // "Task" is the tool's name in older Claude Code versions.
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
+// Tools that change part of an existing file (Write creates or replaces one).
+const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
+const INTERRUPT_PREFIX = '[Request interrupted by user';
+
+/** The files an apply_patch-style patch changes and adds ("*** Update File: <path>", "*** Add File: <path>"). */
+export function patchFiles(patch) {
+  const files = { updated: [], added: [] };
+  for (const m of String(patch ?? '').matchAll(/^\*\*\* (Update|Add) File: (.+?)\s*$/gm)) {
+    files[m[1] === 'Add' ? 'added' : 'updated'].push(m[2]);
+  }
+  return files;
+}
 
 async function readAgentType(transcript) {
   try {
@@ -101,10 +114,23 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const hooks = new Map(); // attachment uuid -> record
   const limits = new Map(); // error-message uuid -> usage-limit hit
   const titles = new Map(); // sessionId -> ai title
-  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>, modes: Set<permission mode> } (adoption / recommendations)
+  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>, modes: Set<permission mode>,
+  //   branches: Set<name>, firstPrompt, workMessages: Map<tool id, commit / PR titles> } (adoption / recommendations)
   const sessions = new Map();
   const sessionInfo = (id) => {
-    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set(), compactions: new Set(), modes: new Set() });
+    if (!sessions.has(id)) {
+      sessions.set(id, {
+        entrypoint: null,
+        prompts: new Set(),
+        prs: new Set(),
+        compactions: new Set(),
+        modes: new Set(),
+        branches: new Set(),
+        firstPrompt: null,
+        promptTexts: new Map(), // prompt uuid -> { timestamp, text }
+        workMessages: new Map(),
+      });
+    }
     return sessions.get(id);
   };
   const sessionStart = new Map(); // sessionId -> { rank, timestamp, cwd } of its earliest record
@@ -177,6 +203,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         agent,
       };
       if (!base.timestamp) continue;
+      if (!agent && d.gitBranch && d.gitBranch !== 'HEAD') sessionInfo(base.sessionId).branches.add(d.gitBranch);
       // A session's project is where it started: later records follow Claude into
       // subfolders (and subagents into worktrees), which would split one session
       // over several projects.
@@ -266,7 +293,13 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
           if (SHELL_TOOLS.has(c.name) && typeof c.input?.command === 'string') {
             const names = shellCommands(c.input.command, c.name);
             tool.shellCommands = c.name === 'PowerShell' ? names.map(psName) : names;
+            const messages = workMessages(c.input.command);
+            if (messages.length) sessionInfo(base.sessionId).workMessages.set(id, messages);
           }
+          // Changed files, for the session intent.
+          const edited = FILE_EDIT_TOOLS.has(c.name) && (c.input?.file_path ?? c.input?.notebook_path);
+          if (edited) tool.editFiles = [edited];
+          if (c.name === 'Write' && c.input?.file_path) tool.writeFile = c.input.file_path;
           tools.set(id, tool);
           attribution.toolUse(key, id, JSON.stringify(c.input ?? {}).length, c.name === 'Skill');
           if (c.name === 'Skill' && c.input?.skill) {
@@ -300,7 +333,14 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         // Prompts a person sent - not agent-to-agent or task notifications, not subagent tasks.
         const origin = d.origin?.kind ?? 'human';
         if (!agent && !d.isSidechain && origin === 'human' && d.promptSource !== 'system') {
-          sessionInfo(base.sessionId).prompts.add(d.uuid ?? `${file}:${base.timestamp}`);
+          const info = sessionInfo(base.sessionId);
+          const promptId = d.uuid ?? `${file}:${base.timestamp}`;
+          info.prompts.add(promptId);
+          const said = text.startsWith(INTERRUPT_PREFIX) ? '' : promptText(text);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(promptId, { timestamp: base.timestamp, text: said });
+          }
         }
       }
       if (!agent && d.entrypoint) sessionInfo(base.sessionId).entrypoint ??= d.entrypoint;

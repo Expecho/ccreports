@@ -22,7 +22,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
 import { shellCommands } from './shell.mjs';
-import { errorLine, normalizeSkillName } from './loader.mjs';
+import { errorLine, normalizeSkillName, patchFiles } from './loader.mjs';
+import { promptText, workMessages } from './intent.mjs';
 import { copilotLimit } from './limits.mjs';
 
 const NANO_AIU_PER_USD = 1e11;
@@ -134,6 +135,10 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
       prs: new Set(),
       compactions: new Set(),
       modes: new Set(), // interactive, plan, autopilot
+      branches: new Set(),
+      firstPrompt: null,
+      promptTexts: new Map(), // event id -> { timestamp, text }
+      workMessages: new Map(), // toolCallId -> commit messages / PR titles
     };
     sessions.set(id, info);
 
@@ -174,6 +179,7 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
         case 'session.start':
         case 'session.resume':
           project ??= data.context?.cwd ?? null;
+          if (data.context?.branch && data.context.branch !== 'HEAD') info.branches.add(data.context.branch);
           break;
 
         case 'session.mode_changed':
@@ -253,6 +259,18 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
           if (SHELLS[raw] && typeof args.command === 'string') {
             const names = shellCommands(args.command, SHELLS[raw]);
             tool.shellCommands = SHELLS[raw] === 'PowerShell' ? names.map(psName) : names;
+            const messages = workMessages(args.command);
+            if (messages.length) info.workMessages.set(data.toolCallId ?? d.id, messages);
+          }
+          // Changed files, for the session intent. create/write make new files.
+          if (raw === 'create' || raw === 'write' || (raw === 'str_replace_editor' && args.command === 'create')) {
+            if (args.path) tool.writeFile = args.path;
+          } else if ((raw === 'edit' || raw === 'str_replace_editor') && args.command !== 'view') {
+            if (args.path) tool.editFiles = [args.path];
+          } else if (raw === 'apply_patch') {
+            const { updated, added } = patchFiles(typeof args === 'string' ? args : (args.input ?? args.patch));
+            if (updated.length) tool.editFiles = updated;
+            if (added.length) tool.writeFile = added[0];
           }
           tools.set(data.toolCallId ?? d.id, tool);
           if (!d.agentId && createsPr(raw, data, args)) prCalls.add(data.toolCallId);
@@ -297,6 +315,11 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
           const content = String(data.content ?? '');
           attributionOf(null).human();
           info.prompts.add(d.id ?? d.timestamp);
+          const said = promptText(content);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(d.id ?? d.timestamp, { timestamp: d.timestamp, text: said });
+          }
           const m = /^\/([\w:.-]+)/.exec(content.trim());
           pendingCommand = null;
           if (m) {

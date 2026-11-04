@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFile, mkdtemp } from 'node:fs/promises';
+import { writeFile, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -11,7 +11,8 @@ import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
-import { buildAdoption, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { buildAdoption, buildIntents, parseIntents, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { INTENTS } from '../src/intent.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 import { loadPlugins, loadCopilotPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
@@ -31,6 +32,9 @@ Reports:
   session        One row per session
   project        One row per project (working directory)
   adoption       Adoption assessment: sessions by phase (chat, assisted, agent-first, multi-agent)
+                 and by intent (bug fix, new development, refactoring, research, ...)
+  intents        Each session's intent and the evidence for it; in JSON also the signals
+                 (title, first prompt, branch, commits, changed files) to classify from
   recommendations  Best-practice recommendations based on your usage, with the cost at stake
 
 Options:
@@ -43,6 +47,8 @@ Options:
   -x, --shell            Programs run by Bash / PowerShell calls (summary tables, sub-rows in period reports)
   -a, --adoption         Append the adoption assessment to the report
   -r, --recommendations  Append best-practice recommendations to the report
+      --intents <file>   Session intents assigned elsewhere (JSON: {"<session id>": "<intent>"}),
+                         replacing the rules' guess, e.g. classified by Claude in the skill
   -n, --top <n>          Rows per ranked list (default 15 summary, 5 breakdown; 0 = all)
   -f, --format <fmt>     table (default), json, csv, markdown (md) or html
   -j, --json             Same as --format json
@@ -80,6 +86,7 @@ try {
       shell: { type: 'boolean', short: 'x' },
       adoption: { type: 'boolean', short: 'a' },
       recommendations: { type: 'boolean', short: 'r' },
+      intents: { type: 'string' },
       top: { type: 'string', short: 'n' },
       format: { type: 'string', short: 'f' },
       json: { type: 'boolean', short: 'j' },
@@ -145,6 +152,23 @@ if (opts.timezone) {
     new Intl.DateTimeFormat('en-US', { timeZone: opts.timezone });
   } catch {
     fail(`unknown timezone "${opts.timezone}"`);
+  }
+}
+
+let intents;
+if (opts.intents) {
+  let json;
+  try {
+    json = JSON.parse((await readFile(opts.intents, 'utf8')).replace(/^﻿/, ''));
+  } catch (err) {
+    fail(`cannot read --intents ${opts.intents}: ${err.message}`);
+  }
+  const parsedIntents = parseIntents(json);
+  intents = parsedIntents.intents;
+  if (parsedIntents.unknown.length) {
+    console.error(
+      `ccreports: ignored unknown intents in ${opts.intents}: ${[...new Set(parsedIntents.unknown)].join(', ')} (expected ${INTENTS.map((i) => i.key).join(', ')})`,
+    );
   }
 }
 
@@ -224,6 +248,7 @@ const docOpts = {
   pricer,
   plugins,
   product,
+  intents,
   // No token usage at all (Cursor alone): reports leave out the token columns.
   tokens: data.usage.length > 0,
 };
@@ -231,6 +256,7 @@ const docOpts = {
 // The adoption assessment and recommendations: their own reports, or appended
 // to another with --adoption / --recommendations.
 const adoption = report === 'adoption' || opts.adoption ? buildAdoption(data, docOpts) : null;
+const intentDoc = report === 'intents' ? buildIntents(data, docOpts) : null;
 // Recommendations per product: each names its own settings and commands, and
 // is weighed against that product's own cost.
 let advice = null;
@@ -270,6 +296,20 @@ if (format === 'json') {
   let json;
   if (report === 'adoption') {
     json = { ...meta, ...adoptionJson };
+  } else if (report === 'intents') {
+    json = {
+      ...meta,
+      intents: INTENTS,
+      sessions: intentDoc.stats.map((s) => ({
+        id: s.id,
+        title: s.title,
+        project: s.project,
+        firstActivity: s.firstActivity,
+        intent: s.intent,
+        evidence: s.intentEvidence,
+        signals: s.intentSignals,
+      })),
+    };
   } else if (report === 'recommendations') {
     json = { ...meta, recommendations: advice.items };
   } else if (report === 'summary') {
@@ -284,7 +324,7 @@ if (format === 'json') {
 } else if (result.totals.sessions.size === 0) {
   fail('no usage found for the selected filters.');
 } else {
-  const own = { adoption, recommendations: advice }[report];
+  const own = { adoption, intents: intentDoc, recommendations: advice }[report];
   let doc = own ?? (report === 'summary' ? buildSummary(result, docOpts) : buildPeriodReport(report, result, docOpts));
   // Appended parts: their summary lines on top, their sections after the report's own.
   const limitDoc = usageLimits && limitParts(usageLimits, { timeZone: opts.timezone });
