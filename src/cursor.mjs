@@ -343,6 +343,7 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), userDirs =
     skills,
     commands,
     hooks: [],
+    limits: [], // Cursor logs no errors
     events,
     titles,
   };

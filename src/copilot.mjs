@@ -24,6 +24,7 @@ import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from
 import { shellCommands } from './shell.mjs';
 import { errorLine, normalizeSkillName, patchFiles } from './loader.mjs';
 import { promptText, workMessages } from './intent.mjs';
+import { copilotLimit } from './limits.mjs';
 
 const NANO_AIU_PER_USD = 1e11;
 const SHELLS = { powershell: 'PowerShell', bash: 'Bash' };
@@ -112,6 +113,7 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
   const skills = new Map();
   const commands = new Map();
   const hooks = new Map();
+  const limits = new Map(); // event id -> usage-limit hit
   const titles = new Map();
   const sessions = new Map();
   const psNames = new Map();
@@ -187,6 +189,13 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
         case 'subagent.started':
           if (d.agentId) agentTypes.set(d.agentId, data.agentType || data.agentName || 'general-purpose');
           break;
+
+        case 'session.error': {
+          // Premium request quota used up (402) or rate limited (429): the request is not answered.
+          const hit = copilotLimit(data);
+          if (hit) limits.set(d.id ?? `${id}:${d.timestamp}`, { ...base(), ...hit });
+          break;
+        }
 
         case 'session.compaction_complete':
           if (data.success === false) break;
@@ -431,6 +440,7 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
     skills: [...skills.values()],
     commands: [...commands.values()],
     hooks: [...hooks.values()],
+    limits: [...limits.values()],
     titles,
   };
 }
@@ -447,11 +457,12 @@ export function mergeData(...parts) {
     skills: [...first.skills],
     commands: [...first.commands],
     hooks: [...first.hooks],
+    limits: [...(first.limits ?? [])],
     events: [...(first.events ?? [])],
   };
   for (const p of rest) {
     out.files += p.files;
-    for (const k of ['usage', 'tools', 'skills', 'commands', 'hooks', 'events']) out[k].push(...(p[k] ?? []));
+    for (const k of ['usage', 'tools', 'skills', 'commands', 'hooks', 'events', 'limits']) out[k].push(...(p[k] ?? []));
     for (const [k, v] of p.sessions) out.sessions.set(k, v);
     for (const [k, v] of p.titles) out.titles.set(k, v);
   }

@@ -16,6 +16,7 @@ import { INTENTS } from '../src/intent.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
 import { loadPlugins, loadCopilotPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
+import { limitStats, limitParts, limitsJSON } from '../src/limits.mjs';
 import { VERSION } from '../src/version.mjs';
 
 const HELP = `ccreports - Claude Code (and GitHub Copilot, Cursor) tool, skill, slash-command and token usage
@@ -278,6 +279,11 @@ if (report === 'recommendations' || opts.recommendations) {
         };
 }
 
+// Usage-limit hits, in the summary and the period reports.
+const usageLimits = ['adoption', 'recommendations'].includes(report)
+  ? null
+  : limitStats(data, { since, until, project: opts.project, timeZone: opts.timezone });
+
 let output;
 if (format === 'json') {
   const meta = { report, source, since, until, pricingSource, ccreportsVersion: VERSION };
@@ -311,6 +317,7 @@ if (format === 'json') {
   } else {
     json = { ...meta, rows: result.buckets.map(toJSON), totals: toJSON(result.totals), plugins: pluginsJSON(plugins) };
   }
+  if (usageLimits) json.usageLimits = limitsJSON(usageLimits);
   if (adoptionJson && report !== 'adoption') json.adoption = adoptionJson;
   if (advice && report !== 'recommendations') json.recommendations = advice.items;
   output = JSON.stringify(json, null, 2) + '\n';
@@ -320,7 +327,8 @@ if (format === 'json') {
   const own = { adoption, intents: intentDoc, recommendations: advice }[report];
   let doc = own ?? (report === 'summary' ? buildSummary(result, docOpts) : buildPeriodReport(report, result, docOpts));
   // Appended parts: their summary lines on top, their sections after the report's own.
-  for (const part of [adoption, advice]) {
+  const limitDoc = usageLimits && limitParts(usageLimits, { timeZone: opts.timezone });
+  for (const part of [limitDoc, adoption, advice]) {
     if (!part || part === doc) continue;
     doc = { ...doc, summary: [...(doc.summary ?? []), ...part.summary], sections: [...doc.sections, ...part.sections] };
   }

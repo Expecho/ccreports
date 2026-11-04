@@ -13,6 +13,7 @@ import path from 'node:path';
 import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
 import { SHELL_TOOLS, shellCommands } from './shell.mjs';
 import { promptText, workMessages } from './intent.mjs';
+import { claudeLimit } from './limits.mjs';
 
 const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
 const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
@@ -111,6 +112,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const skills = new Map(); // tool_use id | user-message uuid -> record
   const commands = new Map(); // user-message uuid -> record
   const hooks = new Map(); // attachment uuid -> record
+  const limits = new Map(); // error-message uuid -> usage-limit hit
   const titles = new Map(); // sessionId -> ai title
   // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>, modes: Set<permission mode>,
   //   branches: Set<name>, firstPrompt, workMessages: Map<tool id, commit / PR titles> } (adoption / recommendations)
@@ -244,6 +246,11 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       }
 
       if (d.type === 'assistant') {
+        // A usage limit stopped the request: Claude Code writes its own error message.
+        if (d.isApiErrorMessage || d.message?.model === '<synthetic>') {
+          const hit = claudeLimit(d, textOf(d.message?.content));
+          if (hit) limits.set(d.uuid ?? `${file}:${base.timestamp}`, { ...base, source: 'claude', ...hit });
+        }
         const m = d.message ?? {};
         const u = m.usage;
         const key = m.id ? `${m.id}:${d.requestId ?? ''}` : d.uuid;
@@ -350,7 +357,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     attributed.push(...attribution.finish());
   }
 
-  for (const map of [usage, tools, skills, commands, hooks]) {
+  for (const map of [usage, tools, skills, commands, hooks, limits]) {
     for (const rec of map.values()) rec.project = sessionStart.get(rec.sessionId)?.cwd ?? rec.project;
   }
 
@@ -380,6 +387,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
     skills: [...skills.values()],
     commands: [...commands.values()],
     hooks: [...hooks.values()],
+    limits: [...limits.values()],
     titles,
   };
 }
