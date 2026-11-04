@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, buildAdoption, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { classify, buildAdoption, buildIntents, parseIntents, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { toHtml, toMarkdown } from '../src/formats.mjs';
 
 const stats = (over) => ({
@@ -89,6 +89,56 @@ test('buildAdoption: cohorts, weekly mix, capabilities, surfaces and summary', (
   assert.deepEqual(surfaces.rows.map((r) => r.cells[0]), ['CLI', 'VS Code']);
   assert.ok(doc.summary.some((l) => l.startsWith('PRs per session: Assisted 1.00, Agent-first 2.00, Multi-agent 0.00')));
   assert.ok(doc.summary.some((l) => l.includes('Not used in this period') && l.includes('worktrees')));
+});
+
+test('buildAdoption: session intent per session and as a section', () => {
+  const data = fixture();
+  data.sessions.get('assist').branches = new Set(['fix/login']);
+  data.sessions.get('agent').workMessages = new Map([['t', ['feat: new page']]]);
+  data.sessions.get('multi').firstPrompt = 'rename the services';
+  const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false });
+  assert.deepEqual(
+    Object.fromEntries(doc.stats.map((s) => [s.id, s.intent])),
+    { chat: 'research', assist: 'bugfix', agent: 'feature', multi: 'refactor' },
+  );
+  assert.deepEqual(doc.stats.find((s) => s.id === 'agent').intentEvidence, ['commit']);
+  const section = doc.sections.find((s) => s.title === 'Session intent');
+  assert.deepEqual(section.rows.map((r) => r.cells[0]), ['Bug fix', 'New development', 'Refactoring', 'Research & analysis']);
+  assert.ok(doc.summary.some((l) => l.startsWith('By intent: bug fix 25%')));
+});
+
+test('parseIntents accepts a map, a list or { sessions }, keys or titles', () => {
+  const { intents, unknown } = parseIntents({ a: 'bugfix', b: 'New development', c: 'banana' });
+  assert.deepEqual([...intents], [['a', 'bugfix'], ['b', 'feature']]);
+  assert.deepEqual(unknown, ['banana']);
+  assert.deepEqual([...parseIntents([{ id: 'x', intent: 'Research & analysis' }]).intents], [['x', 'research']]);
+  assert.deepEqual([...parseIntents({ sessions: [{ id: 'y', intent: 'ops' }] }).intents], [['y', 'ops']]);
+});
+
+test('intents assigned by Claude replace the rules, in adoption and the intents report', () => {
+  const data = fixture();
+  data.sessions.get('assist').branches = new Set(['fix/login']);
+  data.sessions.get('assist').firstPrompt = 'login fails';
+  data.sessions.get('assist').promptTexts = new Map([
+    ['p2', { timestamp: '2026-10-02T10:05:00Z', text: 'now rename it' }],
+    ['p1', { timestamp: '2026-10-02T10:00:00Z', text: 'login fails' }],
+  ]);
+  const intents = new Map([['assist', 'refactor']]);
+  const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false, intents });
+  const assist = doc.stats.find((s) => s.id === 'assist');
+  assert.equal(assist.intent, 'refactor');
+  assert.deepEqual(assist.intentEvidence, ['claude']);
+  assert.equal(assist.intentSignals, undefined); // signals only in the intents report
+  assert.match(doc.sections.find((s) => s.title === 'Session intent').note, /1 of 4 classified by Claude/);
+
+  const report = buildIntents(data, { timeZone: 'UTC', showCost: false, intents });
+  const row = report.sections[0].rows.find((r) => r.cells[2] === 'Refactoring').cells;
+  assert.equal(row[3], 'claude');
+  const signals = report.stats.find((s) => s.id === 'assist').intentSignals;
+  assert.equal(signals.ruleIntent, 'bugfix');
+  assert.deepEqual(signals.branches, ['fix/login']);
+  assert.deepEqual(signals.prompts, ['login fails', 'now rename it']); // all prompts, in order
+  assert.equal(signals.firstPrompt, undefined);
 });
 
 test('adoption renders as cards in HTML and as tables in Markdown', () => {

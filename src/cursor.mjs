@@ -28,11 +28,13 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { shellCommands } from './shell.mjs';
-import { normalizeSkillName } from './loader.mjs';
+import { normalizeSkillName, patchFiles } from './loader.mjs';
+import { promptText, workMessages } from './intent.mjs';
 import { readCursorState } from './cursor-state.mjs';
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'StrReplace', 'MultiEdit', 'Delete', 'ApplyPatch', 'EditNotebook']);
 const WEB_TOOLS = new Set(['WebSearch', 'WebFetch']);
+const FILE_EDIT_TOOLS = new Set(['Edit', 'StrReplace', 'MultiEdit', 'EditNotebook']);
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
 // Cursor's Shell tool runs the platform's shell.
 const SHELL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
@@ -199,6 +201,10 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), userDirs =
         prs: new Set(),
         compactions: new Set(),
         modes: new Set(),
+        branches: new Set(), // Cursor logs none
+        firstPrompt: null,
+        promptTexts: new Map(), // turn -> { timestamp, text }
+        workMessages: new Map(), // tool call -> commit messages / PR titles
       };
       sessions.set(id, info);
 
@@ -224,6 +230,11 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), userDirs =
           turn += 1;
           timestamp = parsePromptTime(/<timestamp>([^<]+)<\/timestamp>/.exec(text)?.[1]) ?? timestamp;
           info.prompts.add(turn);
+          const said = promptText(query[1]);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(turn, { timestamp: timestamp ?? mtime, text: said });
+          }
           events.push(base());
           pendingCommand = null;
           const cmd = /^\/([\w:.-]+)/.exec(query[1]);
@@ -257,6 +268,18 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), userDirs =
           if (name === 'Shell' && typeof input.command === 'string') {
             const names = shellCommands(input.command, SHELL);
             tool.shellCommands = SHELL === 'PowerShell' ? names.map(psName) : names;
+            const messages = workMessages(input.command);
+            if (messages.length) info.workMessages.set(c.id ?? `${turn}:${tools.length}`, messages);
+          }
+          // Changed files, for the session intent.
+          if (name === 'Write' && (input.path ?? input.file_path)) tool.writeFile = input.path ?? input.file_path;
+          if (FILE_EDIT_TOOLS.has(name) && (input.path ?? input.file_path ?? input.target_notebook)) {
+            tool.editFiles = [input.path ?? input.file_path ?? input.target_notebook];
+          }
+          if (name === 'ApplyPatch') {
+            const { updated, added } = patchFiles(Object.values(input).filter((v) => typeof v === 'string').join('\n'));
+            if (updated.length) tool.editFiles = updated;
+            if (added.length) tool.writeFile = added[0];
           }
           if (name === 'SwitchMode' && input.target_mode_id) info.modes.add(input.target_mode_id);
           if (name === 'CreatePlan') info.modes.add('plan');
