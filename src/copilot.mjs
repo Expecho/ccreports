@@ -135,6 +135,7 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
       modes: new Set(), // interactive, plan, autopilot
       branches: new Set(),
       firstPrompt: null,
+      promptTexts: new Map(), // event id -> { timestamp, text }
       workMessages: new Map(), // toolCallId -> commit messages / PR titles
     };
     sessions.set(id, info);
@@ -305,7 +306,11 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
           const content = String(data.content ?? '');
           attributionOf(null).human();
           info.prompts.add(d.id ?? d.timestamp);
-          if (!info.firstPrompt) info.firstPrompt = promptText(content) || null;
+          const said = promptText(content);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(d.id ?? d.timestamp, { timestamp: d.timestamp, text: said });
+          }
           const m = /^\/([\w:.-]+)/.exec(content.trim());
           pendingCommand = null;
           if (m) {

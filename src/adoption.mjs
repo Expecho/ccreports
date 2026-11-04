@@ -125,7 +125,14 @@ export function sessionStats(data, { since, until, project, timeZone, pricer, in
     const assigned = intents?.get(b.key);
     s.intent = assigned ?? intent;
     s.intentEvidence = assigned ? ['claude'] : evidence;
-    if (withSignals) s.intentSignals = { ...signals, ruleIntent: intent, ruleEvidence: evidence };
+    if (withSignals) {
+      // Every prompt typed in the session, in order (resumed copies counted once).
+      const prompts = [...(info?.promptTexts?.values() ?? [])]
+        .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
+        .map((p) => p.text);
+      const { firstPrompt, ...rest } = signals;
+      s.intentSignals = { ...rest, prompts: prompts.length ? prompts : firstPrompt ? [firstPrompt] : [], ruleIntent: intent, ruleEvidence: evidence };
+    }
     return s;
   });
 }

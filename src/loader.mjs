@@ -124,6 +124,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         compactions: new Set(),
         branches: new Set(),
         firstPrompt: null,
+        promptTexts: new Map(), // prompt uuid -> { timestamp, text }
         workMessages: new Map(),
       });
     }
@@ -319,8 +320,13 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         const origin = d.origin?.kind ?? 'human';
         if (!agent && !d.isSidechain && origin === 'human' && d.promptSource !== 'system') {
           const info = sessionInfo(base.sessionId);
-          info.prompts.add(d.uuid ?? `${file}:${base.timestamp}`);
-          if (!info.firstPrompt && !text.startsWith(INTERRUPT_PREFIX)) info.firstPrompt = promptText(text) || null;
+          const promptId = d.uuid ?? `${file}:${base.timestamp}`;
+          info.prompts.add(promptId);
+          const said = text.startsWith(INTERRUPT_PREFIX) ? '' : promptText(text);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(promptId, { timestamp: base.timestamp, text: said });
+          }
         }
       }
       if (!agent && d.entrypoint) sessionInfo(base.sessionId).entrypoint ??= d.entrypoint;

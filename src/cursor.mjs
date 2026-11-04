@@ -190,6 +190,7 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), includeSub
         modes: new Set(),
         branches: new Set(), // Cursor logs none
         firstPrompt: null,
+        promptTexts: new Map(), // turn -> { timestamp, text }
         workMessages: new Map(), // tool call -> commit messages / PR titles
       };
       sessions.set(id, info);
@@ -216,7 +217,11 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), includeSub
           turn += 1;
           timestamp = parsePromptTime(/<timestamp>([^<]+)<\/timestamp>/.exec(text)?.[1]) ?? timestamp;
           info.prompts.add(turn);
-          if (!info.firstPrompt) info.firstPrompt = promptText(query[1]) || null;
+          const said = promptText(query[1]);
+          if (said) {
+            info.firstPrompt ??= said;
+            info.promptTexts.set(turn, { timestamp: timestamp ?? mtime, text: said });
+          }
           events.push(base());
           pendingCommand = null;
           const cmd = /^\/([\w:.-]+)/.exec(query[1]);

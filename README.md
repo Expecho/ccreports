@@ -146,9 +146,9 @@ decided it. Prompts themselves are not in the report. Cursor logs no git
 branch.
 
 `ccreports intents` lists every session with its intent and evidence. With
-`-j` it also prints the signals (title, first prompt, branches, commit
-messages, changed files per kind), so that a model can classify the
-sessions; `--intents <file>` then applies its answer to any report,
+`-j` it also prints the signals (title, every prompt typed in the session,
+branches, commit messages, changed files per kind), so that a model can
+classify the sessions as a whole; `--intents <file>` then applies its answer to any report,
 replacing the rules' guess:
 
 ```sh
@@ -158,8 +158,9 @@ node bin/ccreports.mjs adoption --intents intents.json   # evidence: claude
 ```
 
 The `/ccreports:report` skill does this itself when you ask what your
-sessions were for: Claude reads the signals, classifies each session, and
-runs the report with `--intents`.
+sessions were for: Claude reads all prompts of each session, classifies it,
+and runs the report with `--intents`. The rules themselves only look at the
+first prompt.
 
 ```sh
 node bin/ccreports.mjs adoption -s 20261001 -f html -o adoption.html

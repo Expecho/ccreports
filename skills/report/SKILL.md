@@ -68,16 +68,22 @@ adoption report where intent is not the question, the rules are enough.
    node "<base directory>/../../bin/ccreports.mjs" intents -j --no-open -o "<tmp>/ccreports-intent-signals.json" [options]
    ```
 
-   With more than about 200 sessions, narrow the range with `--since` or ask
-   the user which period to classify.
-2. Read the file. `intents` lists the keys to choose from. Each session has a
-   `title` and `signals`: `firstPrompt`, `branches`, `workMessages` (commit
-   messages and PR titles it wrote), `commands`, `files` (changed files per
-   kind: code, tests, docs, ops, plans), `newFiles`, `edits`, and the rules'
-   guess (`ruleIntent`, `ruleEvidence`). Pick one key per session for its main
-   purpose:
-   - Commits and PR titles are the strongest evidence, then the title and the
-     first prompt, then the branch (a long-lived `feature/` branch also hosts
+   With more than about 200 sessions, or a file over about 300 KB (every
+   prompt is in it), narrow the range with `--since` or ask the user which
+   period to classify.
+2. Read the file (in parts if it is large). `intents` lists the keys to choose
+   from. Each session has a `title` and `signals`: `prompts` (every prompt the
+   user typed, in order, each cut at 500 characters), `branches`,
+   `workMessages` (commit messages and PR titles it wrote), `commands`,
+   `files` (changed files per kind: code, tests, docs, ops, plans), `newFiles`,
+   `edits`, and the rules' guess (`ruleIntent`, `ruleEvidence`). Read all of a
+   session's prompts and pick one key for its main purpose:
+   - Judge the session as a whole: the first prompt sets the task, but later
+     prompts show where the work went (a question that turns into "now build
+     it" is new development; a feature session that becomes chasing an error
+     is a bug fix when most prompts are about that error).
+   - Commits and PR titles are the strongest evidence, then the prompts and
+     the title, then the branch (a long-lived `feature/` branch also hosts
      fixes).
    - A session that changed nothing is research, even if it talks about a bug.
    - Keep `ruleIntent` when the signals don't point elsewhere; use `other` only

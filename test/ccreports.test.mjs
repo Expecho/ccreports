@@ -107,6 +107,7 @@ test('records the signals for session intent: branch, first prompt, commits, cha
     const info = data.sessions.get('s1');
     assert.deepEqual([...info.branches], ['fix/login']);
     assert.equal(info.firstPrompt, 'the login button does not work');
+    assert.deepEqual([...info.promptTexts.values()].map((p) => p.text), ['the login button does not work', 'and the logout one']);
     assert.deepEqual([...info.workMessages.values()], [['fix: login button']]);
     const byName = Object.fromEntries(data.tools.map((t) => [t.name, t]));
     assert.deepEqual(byName.Edit.editFiles, ['/work/app/a.js']);

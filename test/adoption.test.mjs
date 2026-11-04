@@ -112,6 +112,11 @@ test('parseIntents accepts a map, a list or { sessions }, keys or titles', () =>
 test('intents assigned by Claude replace the rules, in adoption and the intents report', () => {
   const data = fixture();
   data.sessions.get('assist').branches = new Set(['fix/login']);
+  data.sessions.get('assist').firstPrompt = 'login fails';
+  data.sessions.get('assist').promptTexts = new Map([
+    ['p2', { timestamp: '2026-10-02T10:05:00Z', text: 'now rename it' }],
+    ['p1', { timestamp: '2026-10-02T10:00:00Z', text: 'login fails' }],
+  ]);
   const intents = new Map([['assist', 'refactor']]);
   const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false, intents });
   const assist = doc.stats.find((s) => s.id === 'assist');
@@ -126,6 +131,8 @@ test('intents assigned by Claude replace the rules, in adoption and the intents 
   const signals = report.stats.find((s) => s.id === 'assist').intentSignals;
   assert.equal(signals.ruleIntent, 'bugfix');
   assert.deepEqual(signals.branches, ['fix/login']);
+  assert.deepEqual(signals.prompts, ['login fails', 'now rename it']); // all prompts, in order
+  assert.equal(signals.firstPrompt, undefined);
 });
 
 test('adoption renders as cards in HTML and as tables in Markdown', () => {
