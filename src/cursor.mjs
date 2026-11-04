@@ -24,10 +24,11 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { shellCommands } from './shell.mjs';
-import { normalizeSkillName } from './loader.mjs';
+import { normalizeSkillName, patchFiles } from './loader.mjs';
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'StrReplace', 'MultiEdit', 'Delete', 'ApplyPatch', 'EditNotebook']);
 const WEB_TOOLS = new Set(['WebSearch', 'WebFetch']);
+const FILE_EDIT_TOOLS = new Set(['Edit', 'StrReplace', 'MultiEdit', 'EditNotebook']);
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
 // Cursor's Shell tool runs the platform's shell.
 const SHELL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
@@ -241,6 +242,17 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), includeSub
           }
           if (EDIT_TOOLS.has(name)) tool.edit = true;
           if (WEB_TOOLS.has(name)) tool.web = true;
+          // Files read and changed in place, for the Read:Edit metrics.
+          if (name === 'Read' && input.path) tool.readFile = input.path;
+          if (name === 'Write' && (input.path ?? input.file_path)) tool.writeFile = input.path ?? input.file_path;
+          if (FILE_EDIT_TOOLS.has(name)) {
+            const file = input.path ?? input.file_path ?? input.target_notebook;
+            if (file) tool.editFiles = [file];
+          }
+          if (name === 'ApplyPatch') {
+            const files = patchFiles(Object.values(input).filter((v) => typeof v === 'string').join('\n'));
+            if (files.length) tool.editFiles = files;
+          }
           if (name === 'Shell' && typeof input.command === 'string') {
             const names = shellCommands(input.command, SHELL);
             tool.shellCommands = SHELL === 'PowerShell' ? names.map(psName) : names;

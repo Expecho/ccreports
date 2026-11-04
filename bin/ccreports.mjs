@@ -249,6 +249,7 @@ if (format === 'json') {
     summary: adoption.summary,
     phases: PHASES,
     autonomyThreshold: AUTONOMY_THRESHOLD,
+    habits: adoption.habits,
     sessions: adoption.stats,
   };
   let json;

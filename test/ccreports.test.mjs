@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadRecords, normalizeSkillName } from '../src/loader.mjs';
+import { loadRecords, normalizeSkillName, patchFiles } from '../src/loader.mjs';
 import { aggregate, parseDateArg, toJSON, MAIN_AGENT } from '../src/aggregate.mjs';
 import { createPricer, parsePricingPage, BUILTIN } from '../src/pricing.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
@@ -86,6 +86,45 @@ test('loads and deduplicates records', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('interrupts are counted apart from prompts; reads, writes and edits keep their file', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  try {
+    const proj = path.join(root, '-work-app');
+    await mkdir(proj, { recursive: true });
+    const lines = [
+      user('2026-10-01T10:00:00Z', 'u1', 'fix the bug'),
+      assistant('2026-10-01T10:00:05Z', 'm1', 'r1', [
+        { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/work/app/a.js' } },
+        { type: 'tool_use', id: 't2', name: 'Edit', input: { file_path: '/work/app/a.js', old_string: 'x', new_string: 'y' } },
+        { type: 'tool_use', id: 't3', name: 'Write', input: { file_path: '/work/app/b.js', content: '' } },
+        { type: 'tool_use', id: 't4', name: 'NotebookEdit', input: { notebook_path: '/work/app/n.ipynb' } },
+      ]),
+      user('2026-10-01T10:00:06Z', 'u2', [{ type: 'text', text: '[Request interrupted by user for tool use]' }]),
+      user('2026-10-01T10:00:07Z', 'u3', [{ type: 'text', text: '[Request interrupted by user]' }]),
+      user('2026-10-01T10:00:08Z', 'u4', 'go on'),
+    ];
+    await writeFile(path.join(proj, 's1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const data = await loadRecords({ dirs: [root] });
+    const info = data.sessions.get('s1');
+    assert.deepEqual([...info.prompts], ['u1', 'u4']);
+    assert.deepEqual([...info.interrupts], ['u2', 'u3']);
+    const byName = Object.fromEntries(data.tools.map((t) => [t.name, t]));
+    assert.equal(byName.Read.readFile, '/work/app/a.js');
+    assert.deepEqual(byName.Edit.editFiles, ['/work/app/a.js']);
+    assert.equal(byName.Write.writeFile, '/work/app/b.js');
+    assert.equal(byName.Write.editFiles, undefined);
+    assert.deepEqual(byName.NotebookEdit.editFiles, ['/work/app/n.ipynb']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('patchFiles lists the files a patch updates', () => {
+  const patch = '*** Begin Patch\n*** Update File: C:\\src\\a.cs\r\n@@\n-x\n+y\n*** Add File: b.cs\n+z\n*** Update File: src/c.ts\n*** End Patch';
+  assert.deepEqual(patchFiles(patch), ['C:\\src\\a.cs', 'src/c.ts']);
+  assert.deepEqual(patchFiles(undefined), []);
 });
 
 test('a session keeps the project it started in', async () => {

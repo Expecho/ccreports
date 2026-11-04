@@ -65,6 +65,10 @@ of every table. Keep these caveats in mind and mention them when relevant:
 - Context size counts the main conversation only.
 - The adoption phases are per session, from the user's own logs; PRs are those
   Claude Code created.
+- Working habits (Read:Edit ratio, edits without a recent Read, prompts per
+  session, interrupts) only see reads through the Read tool: reads through
+  Bash or PowerShell (`cat`, `sed`, `Get-Content`) lower the ratio. Their
+  reference ranges come from claude-session-analyzer and are rough guides.
 
 With `--source copilot`, `cursor` or `all`, also keep in mind:
 

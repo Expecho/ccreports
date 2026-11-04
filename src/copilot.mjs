@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { FileAttribution, createCalibration, charsPerToken, resolveTokens } from './attribution.mjs';
 import { shellCommands } from './shell.mjs';
-import { errorLine, normalizeSkillName } from './loader.mjs';
+import { errorLine, normalizeSkillName, patchFiles } from './loader.mjs';
 
 const NANO_AIU_PER_USD = 1e11;
 const SHELLS = { powershell: 'PowerShell', bash: 'Bash' };
@@ -132,6 +132,7 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
       prs: new Set(),
       compactions: new Set(),
       modes: new Set(), // interactive, plan, autopilot
+      interrupts: new Set(),
     };
     sessions.set(id, info);
 
@@ -241,6 +242,17 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
           }
           if (EDIT_TOOLS.has(raw)) tool.edit = true;
           if (WEB_TOOLS.has(raw) || WEB_TOOLS.has(data.mcpToolName)) tool.web = true;
+          // Files read, created and changed in place, for the Read:Edit metrics.
+          if (raw === 'view' || (raw === 'str_replace_editor' && args.command === 'view')) {
+            if (args.path) tool.readFile = args.path;
+          } else if (raw === 'create' || raw === 'write' || (raw === 'str_replace_editor' && args.command === 'create')) {
+            if (args.path) tool.writeFile = args.path;
+          } else if (raw === 'edit' || raw === 'str_replace_editor') {
+            if (args.path) tool.editFiles = [args.path];
+          } else if (raw === 'apply_patch') {
+            const files = patchFiles(typeof args === 'string' ? args : (args.input ?? args.patch));
+            if (files.length) tool.editFiles = files;
+          }
           if (SHELLS[raw] && typeof args.command === 'string') {
             const names = shellCommands(args.command, SHELLS[raw]);
             tool.shellCommands = SHELLS[raw] === 'PowerShell' ? names.map(psName) : names;
@@ -279,6 +291,11 @@ export async function loadCopilotRecords({ dirs = defaultCopilotDirs(), includeS
           pendingSkillCall = null;
           break;
         }
+
+        case 'abort':
+          // Esc in the CLI.
+          if (!d.agentId && data.reason === 'user initiated') info.interrupts.add(d.id ?? d.timestamp);
+          break;
 
         case 'user.message': {
           if (d.agentId) break; // a subagent's task

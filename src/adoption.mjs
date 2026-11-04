@@ -15,6 +15,24 @@ export const PHASES = [
 // Tool calls per prompt you typed at which a session counts as agent-first.
 export const AUTONOMY_THRESHOLD = 10;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// An edit is "without a Read" when its file wasn't read in this many tool calls
+// before it (claude-session-analyzer's definition), and "without the file in
+// view" when it also wasn't written or edited there: after a write or an edit
+// the agent already knows the file's current content.
+export const READ_WINDOW = 10;
+const samePath = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+const emptyCounts = () => ({
+  edits: 0,
+  backgroundAgents: 0,
+  worktrees: 0,
+  agentMessages: 0,
+  mcpCalls: 0,
+  webCalls: 0,
+  fileReads: 0,
+  fileEdits: 0,
+  editsWithoutRead: 0,
+  editsWithoutView: 0,
+});
 
 const SURFACES = {
   cli: 'CLI',
@@ -58,9 +76,26 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
   const { buckets } = aggregate(data, { report: 'session', since, until, project, timeZone, pricer });
   const inRange = new Set(buckets.map((b) => b.key));
   const counts = new Map();
+  const recent = new Map(); // session + agent -> files its last READ_WINDOW tool calls read / wrote / edited
   for (const t of data.tools) {
     if (!inRange.has(t.sessionId)) continue;
-    const c = counts.get(t.sessionId) ?? { edits: 0, backgroundAgents: 0, worktrees: 0, agentMessages: 0, mcpCalls: 0, webCalls: 0 };
+    const c = counts.get(t.sessionId) ?? emptyCounts();
+    // Reads and in-place edits, in call order per conversation (main or subagent).
+    const ctx = `${t.sessionId}\0${t.agent ?? ''}`;
+    const window = recent.get(ctx) ?? [];
+    for (const file of t.editFiles ?? []) {
+      const p = samePath(file);
+      c.fileEdits += 1;
+      if (!window.some((w) => w.read === p)) c.editsWithoutRead += 1;
+      if (!window.some((w) => w.read === p || w.touched.includes(p))) c.editsWithoutView += 1;
+    }
+    if (t.readFile) c.fileReads += 1;
+    window.push({
+      read: t.readFile ? samePath(t.readFile) : null,
+      touched: [...(t.editFiles ?? []), ...(t.writeFile ? [t.writeFile] : [])].map(samePath),
+    });
+    if (window.length > READ_WINDOW) window.shift();
+    recent.set(ctx, window);
     // edit / web: flags set by the GitHub Copilot loader, whose tools have other names.
     if (EDIT_TOOLS.has(t.name) || t.edit) c.edits += 1;
     if (t.background) c.backgroundAgents += 1;
@@ -80,13 +115,15 @@ export function sessionStats(data, { since, until, project, timeZone, pricer } =
       lastActivity: b.lastActivity,
       surface: SURFACES[info?.entrypoint] ?? info?.entrypoint ?? 'unknown',
       prompts: info?.prompts.size ?? 0,
+      // null where the product logs no interrupts (Cursor).
+      interrupts: info?.interrupts ? info.interrupts.size : null,
       prs: info?.prs.size ?? 0,
       toolCalls: b.toolCalls,
       skills: b.skillCalls,
       subagentLaunches: b.subagentLaunches,
       totalTokens: b.totalTokens,
       costUSD: b.costUSD,
-      ...(counts.get(b.key) ?? { edits: 0, backgroundAgents: 0, worktrees: 0, agentMessages: 0, mcpCalls: 0, webCalls: 0 }),
+      ...(counts.get(b.key) ?? emptyCounts()),
     };
     s.toolCallsPerPrompt = s.toolCalls / Math.max(s.prompts, 1);
     s.phase = classify(s);
@@ -110,12 +147,43 @@ function weekStart(timestamp, timeZone) {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * How sessions are driven: prompts per session, how much the agent reads before
+ * it edits, and how often the user interrupts it.
+ */
+export function workingHabits(stats) {
+  const sum = (list, f) => list.reduce((s, x) => s + f(x), 0);
+  const prompted = stats.filter((s) => s.prompts > 0).map((s) => s.prompts);
+  const logged = stats.filter((s) => s.interrupts != null);
+  const fileReads = sum(stats, (s) => s.fileReads);
+  const fileEdits = sum(stats, (s) => s.fileEdits);
+  const editsWithoutRead = sum(stats, (s) => s.editsWithoutRead);
+  const editsWithoutView = sum(stats, (s) => s.editsWithoutView);
+  const interrupts = logged.length ? sum(logged, (s) => s.interrupts) : null;
+  const loggedToolCalls = sum(logged, (s) => s.toolCalls);
+  return {
+    promptedSessions: prompted.length,
+    avgPromptsPerSession: prompted.length ? sum(prompted, (n) => n) / prompted.length : null,
+    medianPromptsPerSession: median(prompted),
+    fileReads,
+    fileEdits,
+    readEditRatio: fileEdits ? fileReads / fileEdits : null,
+    editsWithoutRead,
+    editsWithoutReadShare: fileEdits ? editsWithoutRead / fileEdits : null,
+    editsWithoutView,
+    editsWithoutViewShare: fileEdits ? editsWithoutView / fileEdits : null,
+    readWindow: READ_WINDOW,
+    interrupts,
+    interruptsPer1kToolCalls: interrupts != null && loggedToolCalls ? (interrupts / loggedToolCalls) * 1000 : null,
+  };
+}
+
 const right = (title) => ({ title, align: 'right' });
 const left = (title) => ({ title, align: 'left' });
 const pct = (v) => `${Math.round(v * 100)}%`;
 
 /** Written assessment lines. */
-function assess(stats, byPhase) {
+function assess(stats, byPhase, habits) {
   if (!stats.length) return [];
   const lines = [];
   const ranked = PHASES.map((p) => ({ ...p, n: byPhase.get(p.key).length })).sort((a, b) => b.n - a.n);
@@ -143,6 +211,12 @@ function assess(stats, byPhase) {
   if (coding.length >= 2) {
     const parts = coding.map((p) => `${p.title.replace(/^Phase \d · /, '')} ${perSession(p.key, (s) => s.prs).toFixed(2)}`);
     lines.push(`PRs per session: ${parts.join(', ')}.`);
+  }
+
+  if (habits.fileEdits) {
+    lines.push(
+      `Read:Edit ratio ${habits.readEditRatio.toFixed(1)}; ${pct(habits.editsWithoutViewShare)} of edits changed a file not read, written or edited in the ${READ_WINDOW} tool calls before.`,
+    );
   }
 
   const unused = FEATURES.filter(([, used]) => !stats.some(used)).map(([label]) => label.toLowerCase());
@@ -225,10 +299,48 @@ export function buildAdoption(data, opts) {
     return { cells: [label, n, share(n, stats.length)] };
   });
 
+  const habits = workingHabits(stats);
+  const fmt = (n) => n.toLocaleString('en-US');
+  const habitRows = [
+    ...(habits.promptedSessions
+      ? [
+          { cells: ['Prompts per session (average)', average(habits.avgPromptsPerSession, 1), `${fmt(habits.promptedSessions)} sessions with a prompt`, ''] },
+          { cells: ['Prompts per session (median)', average(habits.medianPromptsPerSession, 1), 'a far lower median than average: a few long sessions', ''] },
+        ]
+      : []),
+    ...(habits.fileEdits
+      ? [
+          { cells: ['Read:Edit ratio', average(habits.fileReads, habits.fileEdits), `${fmt(habits.fileReads)} file reads, ${fmt(habits.fileEdits)} in-place edits`, 'good above 6, low below 2'] },
+          {
+            cells: [
+              'Edits without a recent Read',
+              share(habits.editsWithoutView, habits.fileEdits),
+              `${fmt(habits.editsWithoutView)} edits to a file not read, written or edited in the ${READ_WINDOW} calls before; ${pct(habits.editsWithoutReadShare)} counting reads only`,
+              'good below 10%, high above 25%',
+            ],
+          },
+        ]
+      : []),
+    ...(habits.interrupts != null
+      ? [
+          {
+            cells: [
+              'User interrupts',
+              habits.interrupts,
+              habits.interruptsPer1kToolCalls == null ? '' : `${habits.interruptsPer1kToolCalls.toFixed(1)} per 1,000 tool calls`,
+              'good below 1, high above 5 per 1,000',
+            ],
+          },
+        ]
+      : []),
+  ];
+  // The median row's note only applies when the two differ a lot.
+  if (habits.promptedSessions && !(habits.avgPromptsPerSession >= 2 * habits.medianPromptsPerSession)) habitRows[1].cells[2] = '';
+
   const range = opts.since || opts.until ? ` (${opts.since ?? '…'} → ${opts.until ?? 'today'})` : '';
   return {
     title: `${opts.product ?? 'Claude Code'} adoption${range}`,
-    summary: assess(stats, byPhase),
+    summary: assess(stats, byPhase, habits),
     sections: [
       { title: 'Adoption cohorts', note: `sessions by how they used ${opts.product ?? 'Claude Code'}`, cards: true, columns: cohortColumns, rows: cohortRows },
       {
@@ -248,7 +360,18 @@ export function buildAdoption(data, opts) {
         columns: [left('Surface'), right('Sessions'), right('Share of sessions'), right('PRs')],
         rows: surfaceRows,
       },
+      ...(habitRows.length
+        ? [
+            {
+              title: 'Working habits',
+              note: 'reference ranges from claude-session-analyzer',
+              columns: [left('Metric'), right('Value'), left('Detail'), left('Reference')],
+              rows: habitRows,
+            },
+          ]
+        : []),
     ],
+    habits,
     stats,
   };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, buildAdoption, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { classify, buildAdoption, sessionStats, workingHabits, AUTONOMY_THRESHOLD, READ_WINDOW } from '../src/adoption.mjs';
 import { toHtml, toMarkdown } from '../src/formats.mjs';
 
 const stats = (over) => ({
@@ -83,6 +83,60 @@ test('buildAdoption: cohorts, weekly mix, capabilities, surfaces and summary', (
   assert.deepEqual(surfaces.rows.map((r) => r.cells[0]), ['CLI', 'VS Code']);
   assert.ok(doc.summary.some((l) => l.startsWith('PRs per session: Assisted 1.00, Agent-first 2.00, Multi-agent 0.00')));
   assert.ok(doc.summary.some((l) => l.includes('Not used in this period') && l.includes('worktrees')));
+});
+
+test('workingHabits: prompts per session, Read:Edit, edits without a recent Read, interrupts', () => {
+  const t = (name, extra = {}) => ({ timestamp: '2026-10-01T10:00:00Z', sessionId: 's1', project: '/p', agent: null, name, ...extra });
+  const tools = [
+    t('Read', { readFile: 'C:\\p\\a.js' }),
+    t('Edit', { editFiles: ['c:/p/A.js'] }), // read just before (path spelled differently)
+    t('Edit', { editFiles: ['c:/p/A.js'] }), // its read is still in the window
+    t('Write', { writeFile: '/p/new.js' }),
+    t('Edit', { editFiles: ['/p/new.js'] }), // written just before
+    t('Edit', { editFiles: ['/p/other.js'] }), // never seen
+    ...Array.from({ length: READ_WINDOW }, () => t('Bash')),
+    t('Edit', { editFiles: ['c:/p/a.js'] }), // read too long ago
+    t('Read', { readFile: '/p/x.js', agent: 'Explore' }), // another conversation's read
+    t('Edit', { editFiles: ['/p/x.js'] }),
+  ];
+  const usage = (sessionId) => ({ timestamp: '2026-10-01T10:00:00Z', sessionId, project: '/p', agent: null, model: 'm', inputTokens: 1, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0 });
+  const session = (prompts, interrupts) => ({ entrypoint: 'cli', prompts: new Set(prompts), prs: new Set(), interrupts: new Set(interrupts) });
+  const data = {
+    usage: [usage('s1'), usage('s2'), usage('s3'), usage('s4')],
+    tools,
+    skills: [],
+    commands: [],
+    titles: new Map(),
+    sessions: new Map([
+      ['s1', session(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9'], ['i1', 'i2'])],
+      ['s2', session(['p1'], [])],
+      ['s3', session(['p1', 'p2'], [])],
+      ['s4', { entrypoint: 'cursor-ide', prompts: new Set(), prs: new Set() }], // no prompts, no interrupt log
+    ]),
+  };
+  const h = workingHabits(sessionStats(data, { timeZone: 'UTC' }));
+  assert.equal(h.promptedSessions, 3);
+  assert.equal(h.avgPromptsPerSession, 4);
+  assert.equal(h.medianPromptsPerSession, 2);
+  assert.equal(h.fileReads, 2);
+  assert.equal(h.fileEdits, 6);
+  assert.equal(h.readEditRatio, 2 / 6);
+  assert.equal(h.editsWithoutRead, 4); // new.js, other.js, a.js after the Bash calls, x.js
+  assert.equal(h.editsWithoutView, 3); // other.js, a.js after the Bash calls, x.js
+  assert.equal(h.interrupts, 2);
+  assert.equal(h.interruptsPer1kToolCalls, (2 / tools.length) * 1000);
+
+  const doc = buildAdoption(data, { timeZone: 'UTC', showCost: false });
+  const habits = doc.sections.find((s) => s.title === 'Working habits');
+  assert.deepEqual(habits.rows.map((r) => r.cells[0]), [
+    'Prompts per session (average)',
+    'Prompts per session (median)',
+    'Read:Edit ratio',
+    'Edits without a recent Read',
+    'User interrupts',
+  ]);
+  assert.deepEqual(habits.rows[3].cells[1], { kind: 'pct', v: 0.5 });
+  assert.ok(doc.summary.some((l) => l.startsWith('Read:Edit ratio 0.3; 50% of edits')));
 });
 
 test('adoption renders as cards in HTML and as tables in Markdown', () => {

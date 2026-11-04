@@ -128,8 +128,18 @@ session; the phase mix per week; how many sessions use each capability
 (skills, subagents, background agents, worktrees, MCP, web, PRs); and usage by
 surface (CLI, desktop, IDE, SDK, and the Copilot and Cursor surfaces with
 `--source`). PRs are the `pr-link` entries Claude Code
-records when it creates a PR; prompts exclude agent-to-agent messages and
-task notifications. `--json` returns the per-session stats and phase.
+records when it creates a PR; prompts exclude agent-to-agent messages, task
+notifications and interrupts. `--json` returns the per-session stats and phase.
+
+It closes with **working habits**. Each metric's reference range comes from
+[claude-session-analyzer](https://github.com/lucemia/claude-session-analyzer):
+
+| Metric | What it counts |
+|---|---|
+| Prompts per session (average / median) | prompts you typed, over sessions with at least one |
+| Read:Edit ratio | file reads (`Read`, Copilot's `view`) per in-place edit (`Edit`, `MultiEdit`, `NotebookEdit`, each file of an `apply_patch`); `Write` and reads through the shell are not counted |
+| Edits without a recent Read | edits to a file that the same conversation (main or subagent) did not read, write or edit in the 10 tool calls before; the detail adds the share counting reads only, claude-session-analyzer's definition |
+| User interrupts | Esc presses (`[Request interrupted by user]`, Copilot's user-initiated `abort`), per 1,000 tool calls; Cursor logs none |
 
 ```sh
 node bin/ccreports.mjs adoption -s 20261001 -f html -o adoption.html

@@ -17,6 +17,15 @@ const SKILL_CONTENT_PREFIX = 'Base directory for this skill';
 const COMMAND_RE = /<command-name>([^<]+)<\/command-name>/;
 // "Task" is the tool's name in older Claude Code versions.
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
+// Tools that change part of an existing file (not Write, which creates or replaces one).
+const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
+// Written as a user message when the user presses Esc ("... by user" or "... by user for tool use").
+const INTERRUPT_PREFIX = '[Request interrupted by user';
+
+/** The files an apply_patch-style patch changes ("*** Update File: <path>" lines). */
+export function patchFiles(patch) {
+  return [...String(patch ?? '').matchAll(/^\*\*\* Update File: (.+?)\s*$/gm)].map((m) => m[1]);
+}
 
 async function readAgentType(transcript) {
   try {
@@ -99,10 +108,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const commands = new Map(); // user-message uuid -> record
   const hooks = new Map(); // attachment uuid -> record
   const titles = new Map(); // sessionId -> ai title
-  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid> } (adoption / recommendations)
+  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>, interrupts: Set<uuid> } (adoption / recommendations)
   const sessions = new Map();
   const sessionInfo = (id) => {
-    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set(), compactions: new Set() });
+    if (!sessions.has(id)) sessions.set(id, { entrypoint: null, prompts: new Set(), prs: new Set(), compactions: new Set(), interrupts: new Set() });
     return sessions.get(id);
   };
   const sessionStart = new Map(); // sessionId -> { rank, timestamp, cwd } of its earliest record
@@ -250,6 +259,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
             if (c.input?.run_in_background) tool.background = true;
           }
           if (c.input?.isolation === 'worktree' || c.name === 'EnterWorktree') tool.worktree = true;
+          if (c.name === 'Read' && c.input?.file_path) tool.readFile = c.input.file_path;
+          if (c.name === 'Write' && c.input?.file_path) tool.writeFile = c.input.file_path;
+          const edited = FILE_EDIT_TOOLS.has(c.name) && (c.input?.file_path ?? c.input?.notebook_path);
+          if (edited) tool.editFiles = [edited];
           if (SHELL_TOOLS.has(c.name) && typeof c.input?.command === 'string') {
             const names = shellCommands(c.input.command, c.name);
             tool.shellCommands = c.name === 'PowerShell' ? names.map(psName) : names;
@@ -284,9 +297,12 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       // Text from the user (not tool results, skill content or injected meta) ends a tool loop.
       if (text && !isSkillContent && !d.isMeta) {
         attribution.human();
+        // An interrupt (Esc) is logged as a user message, but it is not a prompt.
+        const interrupted = text.startsWith(INTERRUPT_PREFIX);
+        if (interrupted && !agent && !d.isSidechain) sessionInfo(base.sessionId).interrupts.add(d.uuid ?? `${file}:${base.timestamp}`);
         // Prompts a person sent - not agent-to-agent or task notifications, not subagent tasks.
         const origin = d.origin?.kind ?? 'human';
-        if (!agent && !d.isSidechain && origin === 'human' && d.promptSource !== 'system') {
+        if (!interrupted && !agent && !d.isSidechain && origin === 'human' && d.promptSource !== 'system') {
           sessionInfo(base.sessionId).prompts.add(d.uuid ?? `${file}:${base.timestamp}`);
         }
       }
