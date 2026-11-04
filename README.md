@@ -70,6 +70,10 @@ both, so rows can add up to more than the total. With `--breakdown`, a
 **Per Session** column gives each tool / skill / command / agent count divided
 by the row's sessions.
 
+Every period report, `session` included, ends with a **Skills** table: every
+skill used in the range, by model and by user, with estimated tokens and cost,
+as in the summary. `--top` limits the breakdown sub-rows, not this list.
+
 The `session` report names each session by its title (the first 8 characters
 of its id when it has none), cut to at most 35 characters with `…` in every
 display format. JSON keeps the full title.
@@ -124,8 +128,11 @@ your sessions as the unit. Each session lands in the first phase that fits:
 
 The report opens with a short written assessment, then shows the cohorts (as
 cards in HTML) with PRs, edits, tool calls per prompt, tokens and cost per
-session; the phase mix per week; how many sessions use each capability
-(skills, subagents, background agents, worktrees, MCP, web, PRs); and usage by
+session and the share of each cohort that used plan mode and auto-approve (Claude
+Code's auto mode or Copilot's autopilot, which run without asking per step; not
+Cursor's Auto model setting, and Cursor doesn't log auto-run); the phase mix per
+week, with the share of sessions in plan mode and auto-approve; how many sessions use each capability
+(plan mode, auto-approve, skills, subagents, background agents, worktrees, MCP, web, PRs); and usage by
 surface (CLI, desktop, IDE, SDK, and the Copilot and Cursor surfaces with
 `--source`). PRs are the `pr-link` entries Claude Code
 records when it creates a PR; prompts exclude agent-to-agent messages and
@@ -285,7 +292,12 @@ How the Copilot logs map onto the reports:
   own events. Hooks are named by event (`PreToolUse`), since Copilot doesn't
   log the command. **Pull requests** are the PR links in the output of
   `gh pr create` or a `create_pull_request` MCP call.
-- Installed plugins are listed for Claude Code only.
+- **Installed plugins** come from `installedPlugins` in
+  `~/.copilot/config.json`, with the enabled state from `enabledPlugins` in
+  `settings.json`. A plugin's skills count whether Copilot logs them as
+  `plugin:skill` or by the skill's own name. Copilot logs hooks by event,
+  so plugin hook runs stay 0. With `--source all` the table gets a
+  **Product** column.
 
 **Recommendations** run the same checks as for Claude Code. Their advice
 names Copilot's own levers: `.github/copilot-instructions.md` / `AGENTS.md`,
@@ -352,10 +364,33 @@ How the transcripts map onto the reports:
   A read made only to look at or edit a skill counts as a use too.
 - **Recommendations:** without tokens, only the workflow checks can fire:
   coding step by step, and skills.
-- **Not available:** tokens, cost, models, context size, hooks, compactions,
-  subagents and pull requests. The transcripts don't record tool results, so
-  no PR links either. IDE chats from before Cursor wrote transcripts are
-  kept only in the editor's database and aren't read.
+- **Subagents:** launches are counted (with their type, and whether they ran
+  in the background), but a subagent's own work isn't in the transcript.
+- **Not available:** tokens, cost, models that answered, context size, hooks,
+  compactions and pull requests. The transcripts don't record tool results,
+  so no PR links either.
+
+**Cursor's database.** The editor also keeps its chats in a SQLite database,
+`state.vscdb` in Cursor's user folder (`%APPDATA%\Cursor\User` on Windows,
+`~/Library/Application Support/Cursor/User` on macOS, `~/.config/Cursor/User`
+on Linux; `CURSOR_USER_DIR` overrides it). ccreports reads it read-only, and
+only metadata, never chat text or tool results:
+
+- **Model you picked and mode,** for every chat in it. `"default"` is
+  Cursor's **Auto** model setting. The adoption report's Agent adoption
+  table gets an **Auto model** row, as a share of the sessions that log a
+  model choice (the CLI's don't). Mode (`agent`, `chat` for Ask, `plan`)
+  counts toward plan mode.
+- **Chats without a transcript,** such as editor chats from before Cursor
+  wrote transcripts. They count from the database: prompts, and tool calls
+  under Cursor's internal names (`write`, `search_replace`,
+  `run_terminal_cmd`, …), timed per message. Their project is the
+  workspace folder the chat belongs to. Drafts never sent are skipped.
+- Token counts in the database are left out: Cursor fills them in for too
+  few messages to add up.
+
+Reading it needs Node 22.13 or later (`node:sqlite`). On older Node,
+ccreports skips the database and says so.
 
 ## What is counted
 

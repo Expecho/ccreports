@@ -112,7 +112,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
   const commands = new Map(); // user-message uuid -> record
   const hooks = new Map(); // attachment uuid -> record
   const titles = new Map(); // sessionId -> ai title
-  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>,
+  // sessionId -> { entrypoint, prompts: Set<uuid>, prs: Set<url>, compactions: Set<uuid>, modes: Set<permission mode>,
   //   branches: Set<name>, firstPrompt, workMessages: Map<tool id, commit / PR titles> } (adoption / recommendations)
   const sessions = new Map();
   const sessionInfo = (id) => {
@@ -122,6 +122,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         prompts: new Set(),
         prs: new Set(),
         compactions: new Set(),
+        modes: new Set(),
         branches: new Set(),
         firstPrompt: null,
         promptTexts: new Map(), // prompt uuid -> { timestamp, text }
@@ -159,6 +160,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         !line.includes('"type":"user"') &&
         !line.includes('"type":"ai-title"') &&
         !line.includes('"type":"pr-link"') &&
+        !line.includes('"type":"permission-mode"') &&
         !line.includes('"subtype":"compact_boundary"') &&
         !line.includes('"type":"hook_')
       ) {
@@ -177,6 +179,10 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
       }
       if (d.type === 'pr-link') {
         if (d.sessionId && d.prUrl) sessionInfo(d.sessionId).prs.add(d.prUrl);
+        continue;
+      }
+      if (d.type === 'permission-mode') {
+        if (d.sessionId && d.permissionMode) sessionInfo(d.sessionId).modes.add(d.permissionMode);
         continue;
       }
       if (d.type === 'system') {
@@ -276,6 +282,7 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
             if (c.input?.run_in_background) tool.background = true;
           }
           if (c.input?.isolation === 'worktree' || c.name === 'EnterWorktree') tool.worktree = true;
+          if (!agent && (c.name === 'EnterPlanMode' || c.name === 'ExitPlanMode')) sessionInfo(base.sessionId).modes.add('plan');
           if (SHELL_TOOLS.has(c.name) && typeof c.input?.command === 'string') {
             const names = shellCommands(c.input.command, c.name);
             tool.shellCommands = c.name === 'PowerShell' ? names.map(psName) : names;
@@ -330,6 +337,8 @@ export async function loadRecords({ dirs = defaultProjectDirs(), includeSubagent
         }
       }
       if (!agent && d.entrypoint) sessionInfo(base.sessionId).entrypoint ??= d.entrypoint;
+      // The permission mode (default, plan, acceptEdits, auto, ...) the prompt was sent in.
+      if (!agent && d.permissionMode) sessionInfo(base.sessionId).modes.add(d.permissionMode);
       const match = COMMAND_RE.exec(text);
       if (match) {
         const name = '/' + normalizeSkillName(match[1]);

@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { loadRecords, defaultProjectDirs } from '../src/loader.mjs';
 import { loadCopilotRecords, defaultCopilotDirs, mergeData } from '../src/copilot.mjs';
 import { loadCursorRecords, defaultCursorDirs } from '../src/cursor.mjs';
+import { defaultCursorUserDirs } from '../src/cursor-state.mjs';
 import { aggregate, parseDateArg, toJSON, REPORTS } from '../src/aggregate.mjs';
 import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
@@ -14,7 +15,7 @@ import { buildAdoption, buildIntents, parseIntents, PHASES, AUTONOMY_THRESHOLD }
 import { INTENTS } from '../src/intent.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
-import { loadPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
+import { loadPlugins, loadCopilotPlugins, pluginRows, pluginsJSON } from '../src/plugins.mjs';
 import { VERSION } from '../src/version.mjs';
 
 const HELP = `ccreports - Claude Code (and GitHub Copilot, Cursor) tool, skill, slash-command and token usage
@@ -179,7 +180,12 @@ const cursorDirs = opts['cursor-dir']?.length ? opts['cursor-dir'] : defaultCurs
 const wants = (src) => source === src || source === 'all';
 const claudeData = wants('claude') ? await loadRecords({ dirs, includeSubagents }) : null;
 const copilotData = wants('copilot') ? await loadCopilotRecords({ dirs: copilotDirs, includeSubagents }) : null;
-const cursorData = wants('cursor') ? await loadCursorRecords({ dirs: cursorDirs, includeSubagents }) : null;
+const cursorData = wants('cursor')
+  ? await loadCursorRecords({ dirs: cursorDirs, userDirs: defaultCursorUserDirs(), includeSubagents })
+  : null;
+if (cursorData?.stateSkipped) {
+  console.error("ccreports: reading Cursor's database needs Node 22.13+; older chats and model choices are left out.");
+}
 const loaded = [claudeData, copilotData, cursorData].filter(Boolean);
 const data = loaded.length > 1 ? mergeData(...loaded) : loaded[0];
 if (data.files === 0) {
@@ -219,8 +225,12 @@ if (showCost) {
 }
 
 // Installed plugins and what of each was used, in every report.
-// (Claude Code plugins only.)
-const plugins = claudeData ? pluginRows(await loadPlugins(dirs), result.totals, { project: opts.project }) : [];
+// (Claude Code and GitHub Copilot; Cursor's installs aren't read.)
+const installed = [
+  ...(claudeData ? await loadPlugins(dirs) : []),
+  ...(copilotData ? await loadCopilotPlugins(copilotDirs) : []),
+];
+const plugins = pluginRows(installed, result.totals, { project: opts.project });
 
 // Only the terminal table hides columns to fit the screen.
 const compact = format === 'table' && (opts.compact || (toTTY && process.stdout.columns < 120));

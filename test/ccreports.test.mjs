@@ -180,6 +180,11 @@ test('period report shows sessions and per-session averages on breakdown rows', 
     assert.equal(plain.columns.some((c) => c.title === 'Per Session'), false);
     const session = buildPeriodReport('session', aggregate(data, { report: 'session' }), { breakdown: true }).sections[0];
     assert.equal(session.columns.some((c) => c.title === 'Sessions' || c.title === 'Per Session'), false);
+
+    // Every period report lists all skills used, whatever --top is.
+    const skills = buildPeriodReport('session', aggregate(data, { report: 'session' }), { top: 1 }).sections[1];
+    assert.equal(skills.title, 'Skills');
+    assert.deepEqual(skills.rows.map((r) => r.cells.slice(0, 4)), [['decide', 1, 0, 1], ['plan', 0, 1, 1]]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -358,4 +363,26 @@ test('session names are at most 35 characters in reports', async () => {
   const data = { usage: [], tools: [rec], skills: [], commands: [], hooks: [], titles: new Map([['s1', 'A'.repeat(50)]]) };
   const doc = buildPeriodReport('session', aggregate(data, { report: 'session' }), {});
   assert.equal(doc.sections[0].rows[0].cells[0], 'A'.repeat(34) + '…');
+});
+
+test('records the permission modes a session ran in', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
+  try {
+    const proj = path.join(root, '-work-app');
+    await mkdir(proj, { recursive: true });
+    const lines = [
+      { type: 'permission-mode', permissionMode: 'acceptEdits', sessionId: 's1' },
+      { ...user('2026-10-01T10:00:00Z', 'u1', 'plan this'), permissionMode: 'plan' },
+      { ...user('2026-10-01T10:00:00Z', 'u2', 'hi'), sessionId: 's2' },
+      { ...assistant('2026-10-01T10:00:05Z', 'm1', 'r1', [{ type: 'tool_use', id: 't1', name: 'EnterPlanMode', input: {} }]), sessionId: 's2' },
+      { ...user('2026-10-01T10:00:00Z', 'u3', 'hi'), sessionId: 's3' },
+    ];
+    await writeFile(path.join(proj, 's1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const { sessions } = await loadRecords({ dirs: [root] });
+    assert.deepEqual([...sessions.get('s1').modes].sort(), ['acceptEdits', 'plan']);
+    assert.deepEqual([...sessions.get('s2').modes], ['plan']); // entered by the model
+    assert.deepEqual([...sessions.get('s3').modes], []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

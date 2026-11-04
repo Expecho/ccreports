@@ -17,6 +17,8 @@ export const PHASES = [
 export const AUTONOMY_THRESHOLD = 10;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const samePath = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+// Modes that run without asking per tool call: Claude Code's auto mode, Copilot's autopilot.
+const AUTO_MODES = ['auto', 'autopilot'];
 
 const SURFACES = {
   cli: 'CLI',
@@ -42,10 +44,14 @@ export function classify(s) {
   return 'assisted';
 }
 
-// Feature rows of the "Agent adoption" table: label and whether a session used it.
+// Feature rows of the "Agent adoption" table: label, whether a session used it
+// and, where only some sessions log it, which sessions the share is out of.
 const FEATURES = [
   ['Code edits', (s) => s.edits > 0],
   ['Pull requests', (s) => s.prs > 0],
+  ['Plan mode', (s) => s.planMode],
+  ['Auto-approve', (s) => s.autoMode],
+  ['Auto model', (s) => s.autoModel, (s) => s.modelChoice != null],
   ['Skills', (s) => s.skills > 0],
   ['Subagents', (s) => s.subagentLaunches > 0],
   ['Background agents', (s) => s.backgroundAgents > 0],
@@ -98,6 +104,11 @@ export function sessionStats(data, { since, until, project, timeZone, pricer, in
       surface: SURFACES[info?.entrypoint] ?? info?.entrypoint ?? 'unknown',
       prompts: info?.prompts.size ?? 0,
       prs: info?.prs.size ?? 0,
+      planMode: info?.modes?.has('plan') ?? false,
+      autoMode: AUTO_MODES.some((m) => info?.modes?.has(m)),
+      // The model picked for the session, where logged (Cursor's database); "default" is Cursor's Auto.
+      modelChoice: info?.modelChoice ?? null,
+      autoModel: info?.modelChoice === 'default',
       toolCalls: b.toolCalls,
       skills: b.skillCalls,
       subagentLaunches: b.subagentLaunches,
@@ -158,7 +169,7 @@ const left = (title) => ({ title, align: 'left' });
 const pct = (v) => `${Math.round(v * 100)}%`;
 
 /** Written assessment lines. */
-function assess(stats, byPhase) {
+function assess(stats, byPhase, features) {
   if (!stats.length) return [];
   const lines = [];
   const ranked = PHASES.map((p) => ({ ...p, n: byPhase.get(p.key).length })).sort((a, b) => b.n - a.n);
@@ -188,7 +199,7 @@ function assess(stats, byPhase) {
     lines.push(`PRs per session: ${parts.join(', ')}.`);
   }
 
-  const unused = FEATURES.filter(([, used]) => !stats.some(used)).map(([label]) => label.toLowerCase());
+  const unused = features.filter(([, used]) => !stats.some(used)).map(([label]) => label.toLowerCase());
   if (unused.length) lines.push(`Not used in this period: ${unused.join(', ')}.`);
   return lines;
 }
@@ -199,6 +210,13 @@ export function buildAdoption(data, opts) {
   const stats = sessionStats(data, opts);
   const byPhase = new Map(PHASES.map((p) => [p.key, stats.filter((s) => s.phase === p.key)]));
   const sum = (list, f) => list.reduce((s, x) => s + f(x), 0);
+  // Cursor's logs don't record auto-run, so its reports leave auto mode out.
+  const logsAuto = opts.product !== 'Cursor';
+  // Only Cursor logs the model you picked: the row shows when some session has it.
+  const logsModelChoice = stats.some((s) => s.modelChoice != null);
+  const features = FEATURES.filter(
+    ([label]) => (logsAuto || label !== 'Auto-approve') && (logsModelChoice || label !== 'Auto model'),
+  ).map(([label, ...rest]) => [label === 'Auto model' && opts.product !== 'Cursor' ? 'Auto model (Cursor)' : label, ...rest]);
 
   // Cohorts: one card per phase.
   // Column order matters for the HTML cards: title, subtitle, headline figure.
@@ -211,6 +229,8 @@ export function buildAdoption(data, opts) {
     right('PRs'),
     right('Edits per session'),
     right('Median tool calls per prompt'),
+    right('Plan mode'),
+    ...(logsAuto ? [right('Auto-approve')] : []),
     ...(opts.tokens !== false ? [right('Tokens per session')] : []),
     ...(showCost ? [right('Cost per session')] : []),
   ];
@@ -230,6 +250,8 @@ export function buildAdoption(data, opts) {
         prs,
         average(sum(list, (s) => s.edits), list.length),
         m == null ? '' : average(m, 1),
+        share(list.filter((s) => s.planMode).length, list.length),
+        ...(logsAuto ? [share(list.filter((s) => s.autoMode).length, list.length)] : []),
         ...(opts.tokens !== false ? [list.length ? Math.round(sum(list, (s) => s.totalTokens) / list.length) : ''] : []),
         ...(showCost ? [list.length ? money(sum(list, (s) => s.costUSD) / list.length) : ''] : []),
       ],
@@ -240,15 +262,24 @@ export function buildAdoption(data, opts) {
   const weekMap = new Map();
   for (const s of stats) {
     const key = weekStart(s.firstActivity, timeZone);
-    const w = weekMap.get(key) ?? { key, total: 0, prs: 0, phases: Object.fromEntries(PHASES.map((p) => [p.key, 0])) };
+    const w = weekMap.get(key) ?? { key, total: 0, prs: 0, plan: 0, auto: 0, phases: Object.fromEntries(PHASES.map((p) => [p.key, 0])) };
     w.total += 1;
     w.prs += s.prs;
+    if (s.planMode) w.plan += 1;
+    if (s.autoMode) w.auto += 1;
     w.phases[s.phase] += 1;
     weekMap.set(key, w);
   }
   const weeks = [...weekMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
   const weekRows = weeks.map((w) => ({
-    cells: [w.key, w.total, ...PHASES.map((p) => share(w.phases[p.key], w.total)), w.prs],
+    cells: [
+      w.key,
+      w.total,
+      ...PHASES.map((p) => share(w.phases[p.key], w.total)),
+      share(w.plan, w.total),
+      ...(logsAuto ? [share(w.auto, w.total)] : []),
+      w.prs,
+    ],
   }));
 
   // Usage by surface.
@@ -263,9 +294,9 @@ export function buildAdoption(data, opts) {
     .sort((a, b) => b[1].sessions - a[1].sessions)
     .map(([name, e]) => ({ cells: [name, e.sessions, share(e.sessions, stats.length), e.prs] }));
 
-  const featureRows = FEATURES.map(([label, used]) => {
+  const featureRows = features.map(([label, used, logged]) => {
     const n = stats.filter(used).length;
-    return { cells: [label, n, share(n, stats.length)] };
+    return { cells: [label, n, share(n, logged ? stats.filter(logged).length : stats.length)] };
   });
 
   // What sessions were for: one row per intent seen, the most common first, Other last.
@@ -284,7 +315,7 @@ export function buildAdoption(data, opts) {
       ...(showCost ? [money(sum(list, (s) => s.costUSD) / list.length)] : []),
     ],
   }));
-  const summary = assess(stats, byPhase);
+  const summary = assess(stats, byPhase, features);
   const named = byIntent.filter((i) => i.key !== 'other').slice(0, 3);
   if (named.length) summary.push(`By intent: ${named.map((i) => `${i.title.toLowerCase()} ${pct(i.list.length / stats.length)}`).join(', ')}.`);
 
@@ -297,12 +328,19 @@ export function buildAdoption(data, opts) {
       {
         title: 'Phase mix per week',
         note: 'by the week a session started',
-        columns: [left('Week'), right('Sessions'), ...PHASES.map((p) => right(p.title)), right('PRs')],
+        columns: [
+          left('Week'),
+          right('Sessions'),
+          ...PHASES.map((p) => right(p.title)),
+          right('Plan mode'),
+          ...(logsAuto ? [right('Auto-approve')] : []),
+          right('PRs'),
+        ],
         rows: weekRows,
       },
       {
         title: 'Agent adoption',
-        note: 'share of sessions using each capability',
+        note: `share of sessions using each capability${logsModelChoice ? '; Auto model: of the sessions that log the model picked' : ''}`,
         columns: [left('Capability'), right('Sessions'), right('Share of sessions')],
         rows: featureRows,
       },

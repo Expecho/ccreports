@@ -41,7 +41,7 @@ function fixture() {
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
   });
-  const session = (entrypoint, prompts, prs = []) => ({ entrypoint, prompts: new Set(prompts), prs: new Set(prs) });
+  const session = (entrypoint, prompts, prs = [], modes = []) => ({ entrypoint, prompts: new Set(prompts), prs: new Set(prs), modes: new Set(modes) });
   return {
     usage: [u('chat', 1), u('assist', 2), u('agent', 3), u('multi', 4)],
     tools: [
@@ -57,8 +57,8 @@ function fixture() {
     sessions: new Map([
       ['chat', session('cli', ['p1'])],
       ['assist', session('cli', ['p1', 'p2'], ['https://example.com/pr/1'])],
-      ['agent', session('claude-vscode', ['p1'], ['https://example.com/pr/2', 'https://example.com/pr/3'])],
-      ['multi', session('cli', ['p1'])],
+      ['agent', session('claude-vscode', ['p1'], ['https://example.com/pr/2', 'https://example.com/pr/3'], ['plan'])],
+      ['multi', session('cli', ['p1'], [], ['auto'])],
     ]),
   };
 }
@@ -75,11 +75,17 @@ test('buildAdoption: cohorts, weekly mix, capabilities, surfaces and summary', (
   assert.equal(agentRow[0], 'Phase 2 · Agent-first');
   assert.deepEqual(agentRow[2], { kind: 'avg', v: 2 }); // PRs per session
   assert.equal(agentRow[3], 1); // sessions
+  assert.deepEqual(agentRow[cohorts.columns.findIndex((c) => c.title === 'Plan mode')], { kind: 'pct', v: 1 });
   assert.deepEqual(weekly.rows.map((r) => r.cells[0]), ['2026-09-28']); // Oct 1-4, 2026 is Thu-Sun of one week
   assert.equal(weekly.rows[0].cells[1], 4);
+  const weekCell = (title) => weekly.rows[0].cells[weekly.columns.findIndex((c) => c.title === title)];
+  assert.deepEqual(weekCell('Plan mode'), { kind: 'pct', v: 0.25 });
+  assert.deepEqual(weekCell('Auto-approve'), { kind: 'pct', v: 0.25 });
   const used = Object.fromEntries(capabilities.rows.map((r) => [r.cells[0], r.cells[1]]));
   assert.equal(used['Background agents'], 1);
   assert.equal(used['Pull requests'], 2);
+  assert.equal(used['Plan mode'], 1);
+  assert.equal(used['Auto-approve'], 1);
   assert.deepEqual(surfaces.rows.map((r) => r.cells[0]), ['CLI', 'VS Code']);
   assert.ok(doc.summary.some((l) => l.startsWith('PRs per session: Assisted 1.00, Agent-first 2.00, Multi-agent 0.00')));
   assert.ok(doc.summary.some((l) => l.includes('Not used in this period') && l.includes('worktrees')));
@@ -144,4 +150,16 @@ test('adoption renders as cards in HTML and as tables in Markdown', () => {
   const md = toMarkdown(doc);
   assert.match(md, /^# Claude Code adoption\n\n- Most of your sessions/);
   assert.match(md, /## Adoption cohorts/);
+});
+
+test('auto-approve counts auto mode and autopilot and is left out for Cursor', () => {
+  const data = fixture();
+  data.sessions.get('agent').modes.add('autopilot');
+  const copilot = buildAdoption(data, { timeZone: 'UTC', showCost: false, product: 'GitHub Copilot' });
+  assert.deepEqual(copilot.stats.filter((s) => s.autoMode).map((s) => s.id).sort(), ['agent', 'multi']);
+  const cursor = buildAdoption(data, { timeZone: 'UTC', showCost: false, product: 'Cursor' });
+  assert.ok(!cursor.sections[0].columns.some((c) => c.title === 'Auto-approve'));
+  assert.ok(!cursor.sections[1].columns.some((c) => c.title === 'Auto-approve'));
+  assert.equal(cursor.sections[1].columns.length, cursor.sections[1].rows[0].cells.length);
+  assert.ok(!cursor.sections[2].rows.some((r) => r.cells[0] === 'Auto-approve'));
 });

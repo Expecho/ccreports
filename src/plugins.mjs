@@ -1,13 +1,23 @@
-// Installed Claude Code plugins (<config dir>/plugins/installed_plugins.json),
+// Installed Claude Code plugins (<config dir>/plugins/installed_plugins.json)
+// and GitHub Copilot plugins (installedPlugins in ~/.copilot/config.json),
 // whether each is enabled (the enabledPlugins setting of its scope), and how
 // often the transcripts used what it provides.
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 async function readJSON(file) {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** JSON with whole-line // comments, as Copilot writes its config.json. */
+async function readJSONC(file) {
+  try {
+    return JSON.parse((await readFile(file, 'utf8')).replace(/^\s*\/\/.*$/gm, ''));
   } catch {
     return null;
   }
@@ -24,9 +34,13 @@ function settingsFile(root, install) {
 async function hookCommands(installPath) {
   const commands = new Set();
   if (!installPath) return commands;
-  const manifest = await readJSON(path.join(installPath, '.claude-plugin', 'plugin.json'));
+  // Claude Code reads .claude-plugin/plugin.json; Copilot also reads plugin.json at the root.
+  const manifests = [path.join(installPath, '.claude-plugin', 'plugin.json'), path.join(installPath, 'plugin.json')];
   const files = [await readJSON(path.join(installPath, 'hooks', 'hooks.json'))];
-  if (manifest?.hooks && typeof manifest.hooks === 'object') files.push(manifest);
+  for (const file of manifests) {
+    const manifest = await readJSON(file);
+    if (manifest?.hooks && typeof manifest.hooks === 'object') files.push(manifest);
+  }
   for (const file of files) {
     for (const groups of Object.values(file?.hooks ?? {})) {
       for (const group of Array.isArray(groups) ? groups : []) {
@@ -72,8 +86,62 @@ export async function loadPlugins(dirs) {
           lastUpdated: install.lastUpdated ?? null,
           installPath: install.installPath ?? null,
           hookCommands: await hookCommands(install.installPath),
+          skillNames: new Set(),
+          product: 'Claude Code',
         });
       }
+    }
+  }
+  return plugins;
+}
+
+/** Names of the skills a plugin ships: the folders in its manifest's skill paths (default skills/). */
+async function skillNames(installPath) {
+  const names = new Set();
+  if (!installPath) return names;
+  const manifest = await readJSON(path.join(installPath, 'plugin.json'));
+  const dirs = [manifest?.skills ?? './skills/'].flat().filter((d) => typeof d === 'string');
+  for (const dir of dirs) {
+    try {
+      for (const e of await readdir(path.join(installPath, dir), { withFileTypes: true })) if (e.isDirectory()) names.add(e.name);
+    } catch {
+      // No such folder.
+    }
+  }
+  return names;
+}
+
+/**
+ * Installed GitHub Copilot plugins. `dirs` are the session-state directories;
+ * config.json (the installs) and settings.json (enabledPlugins) sit next to them.
+ */
+export async function loadCopilotPlugins(dirs) {
+  const roots = [...new Set(dirs.map((d) => path.dirname(path.resolve(d))))];
+  const plugins = [];
+  for (const root of roots) {
+    const config = await readJSONC(path.join(root, 'config.json'));
+    const enabledPlugins = (await readJSONC(path.join(root, 'settings.json')))?.enabledPlugins ?? {};
+    for (const install of Array.isArray(config?.installedPlugins) ? config.installedPlugins : []) {
+      if (!install?.name) continue;
+      const marketplace = install.marketplace ?? '';
+      const id = marketplace ? `${install.name}@${marketplace}` : install.name;
+      const enabled = enabledPlugins[id] ?? install.enabled;
+      plugins.push({
+        id,
+        name: install.name,
+        marketplace,
+        version: install.version ?? '',
+        scope: 'user',
+        projectPath: null,
+        enabled: typeof enabled === 'boolean' ? enabled : null,
+        installedAt: install.installed_at ?? null,
+        lastUpdated: install.installed_at ?? null,
+        installPath: install.cache_path ?? null,
+        hookCommands: await hookCommands(install.cache_path),
+        // Copilot may log a plugin's skill without the plugin prefix.
+        skillNames: await skillNames(install.cache_path),
+        product: 'GitHub Copilot',
+      });
     }
   }
   return plugins;
@@ -93,7 +161,7 @@ export function pluginUsage(plugin, totals) {
     [...plugin.hookCommands].flatMap((c) => [c, ...roots.map((r) => c.replaceAll('${CLAUDE_PLUGIN_ROOT}', r))]),
   );
   const usage = {
-    skills: sum(totals.skills, (k) => k.startsWith(prefix), (s) => s.model + s.user),
+    skills: sum(totals.skills, (k) => k.startsWith(prefix) || plugin.skillNames?.has(k), (s) => s.model + s.user),
     commands: sum(totals.commands, (k) => k.replace(/^\//, '').startsWith(prefix)),
     agents: sum(totals.agents, (k) => k.startsWith(prefix), (a) => a.launches),
     // Claude Code names a plugin's MCP servers plugin_<plugin>_<server>.
@@ -114,4 +182,4 @@ export function pluginRows(plugins, totals, { project } = {}) {
 }
 
 /** JSON form of pluginRows. */
-export const pluginsJSON = (rows) => rows.map(({ hookCommands, installPath, ...p }) => p);
+export const pluginsJSON = (rows) => rows.map(({ hookCommands, installPath, skillNames, ...p }) => p);

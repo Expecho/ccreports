@@ -81,7 +81,7 @@ const PRODUCTS = {
         'model switch': 'Each model has its own cache: switching with `/model` mid-conversation re-reads the whole history. Pick the model at the start, or `/compact` before you switch.',
       },
       autonomy:
-        'Describe the whole task up front - goal, constraints and how to verify it - and let Claude run. Use plan mode for bigger changes, and turn workflows you repeat into skills.',
+        'Describe the whole task up front - goal, constraints and how to verify it - and let Claude run. Use plan mode for bigger changes and auto mode to let Claude work without asking for each tool call, and turn workflows you repeat into skills.',
       parallel:
         'Ask Claude to run independent tasks as parallel subagents: they run in the background while you keep working (`Ctrl+B` moves a long-running one there). When several agents change code at the same time, give each its own worktree: `isolation: worktree` in an agent\'s definition, or `claude -w <name>` for a whole session.',
       skills:
@@ -390,10 +390,12 @@ export function recommend(data, opts = {}) {
         return v.length ? v[Math.floor(v.length / 2)] : 0;
       };
       const agentic = coding.filter((s) => s.phase !== 'assisted');
-      // Copilot logs the modes a session ran in.
+      // The loaders record the modes a session ran in; Cursor's logs have no auto-run.
       const modes = (mode) => coding.filter((s) => data.sessions.get(s.id)?.modes?.has(mode)).length;
+      const auto = { claude: ['auto mode', 'auto'], copilot: ['autopilot', 'autopilot'] }[opts.source ?? 'claude'];
+      const autoText = auto ? ` and ${auto[0]} in ${modes(auto[1])}` : '';
       const modeText = data.sessions.get(coding[0].id)?.modes
-        ? ` Plan mode was used in ${modes('plan')} and autopilot in ${modes('autopilot')} of ${coding.length} coding sessions.`
+        ? ` Plan mode was used in ${modes('plan')}${autoText} of ${coding.length} coding sessions.`
         : '';
       recs.push({
         id: 'autonomy',

@@ -16,6 +16,10 @@
 //   - Tools Cursor loads on demand are called through CallDynamicTool; they are
 //     counted under their own name (MCP tools as mcp__<server>__<tool>).
 //
+// Cursor's own database (src/cursor-state.mjs) adds, per chat, the model you
+// picked and its mode, and the chats that have no transcript: those count
+// from the database, with Cursor's internal tool names (write, read_file, ...).
+//
 // The format is undocumented, so every field access is defensive.
 
 import { createReadStream, existsSync } from 'node:fs';
@@ -26,6 +30,7 @@ import path from 'node:path';
 import { shellCommands } from './shell.mjs';
 import { normalizeSkillName, patchFiles } from './loader.mjs';
 import { promptText, workMessages } from './intent.mjs';
+import { readCursorState } from './cursor-state.mjs';
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'StrReplace', 'MultiEdit', 'Delete', 'ApplyPatch', 'EditNotebook']);
 const WEB_TOOLS = new Set(['WebSearch', 'WebFetch']);
@@ -37,6 +42,10 @@ const SHELL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
 // .claude/skills, .agents/skills, ... in a project or the home directory. A
 // SKILL.md elsewhere (a plugin's source, say) is read as a file, not used.
 const SKILL_FILE = /[\\/]\.[\w-]+[\\/]skills(?:-cursor)?[\\/]([^\\/]+)[\\/]SKILL\.md$/i;
+// Tool names in Cursor's database, which differ from the transcripts'.
+const DB_EDIT_TOOL = /^(write|search_replace|edit_file|delete_file|apply_patch|multi_edit)/;
+const DB_WEB_TOOL = /^(web_search|fetch)/;
+const DB_SHELL_TOOL = /^run_terminal/;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** The Cursor config directory, honoring CURSOR_CONFIG_DIR. */
@@ -159,7 +168,11 @@ function toolName(c) {
   return !ns || ns === 'cursor' ? c.input.toolName : `mcp__${ns}__${c.input.toolName}`;
 }
 
-export async function loadCursorRecords({ dirs = defaultCursorDirs(), includeSubagents = true } = {}) {
+/**
+ * `userDirs`: Cursor's user data directories, for its database (see
+ * defaultCursorUserDirs in src/cursor-state.mjs); none by default.
+ */
+export async function loadCursorRecords({ dirs = defaultCursorDirs(), userDirs = [], includeSubagents = true } = {}) {
   const tools = [];
   const skills = [];
   const commands = [];
@@ -283,10 +296,48 @@ export async function loadCursorRecords({ dirs = defaultCursorDirs(), includeSub
     }
   }
 
+  // Cursor's database: the chosen model and mode of every chat, and the chats without a transcript.
+  const state = await readCursorState(userDirs);
+  for (const [id, chat] of state ?? []) {
+    let info = sessions.get(id);
+    if (!info) {
+      const prompts = chat.messages.filter((m) => m.type === 'user');
+      if (!prompts.length) continue; // a draft never sent
+      info = { entrypoint: 'cursor-ide', prompts: new Set(), prs: new Set(), compactions: new Set(), modes: new Set() };
+      sessions.set(id, info);
+      fileCount += 1;
+      if (chat.title) titles.set(id, chat.title);
+      const project = chat.project ?? '(no folder)';
+      let timestamp = chat.createdAt;
+      const base = () => ({ timestamp, sessionId: id, project, agent: null, source: 'cursor' });
+      for (const m of chat.messages) {
+        timestamp = m.timestamp ?? timestamp;
+        if (!timestamp) continue;
+        if (m.type === 'user') {
+          info.prompts.add(info.prompts.size + 1);
+          events.push(base());
+          continue;
+        }
+        if (!m.tool) continue;
+        const tool = { ...base(), name: m.tool.name };
+        if (DB_EDIT_TOOL.test(m.tool.name)) tool.edit = true;
+        if (DB_WEB_TOOL.test(m.tool.name)) tool.web = true;
+        if (DB_SHELL_TOOL.test(m.tool.name) && m.tool.command) {
+          const names = shellCommands(m.tool.command, SHELL);
+          tool.shellCommands = SHELL === 'PowerShell' ? names.map(psName) : names;
+        }
+        tools.push(tool);
+      }
+    }
+    if (chat.mode) info.modes.add(chat.mode);
+    if (chat.model) info.modelChoice = chat.model;
+  }
+
   return {
     sessions,
     charsPerToken: null,
     files: fileCount,
+    stateSkipped: state === null, // Node without node:sqlite
     usage: [],
     tools,
     skills,
