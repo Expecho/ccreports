@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadCursorRecords, parsePromptTime, decodeProjectDir } from '../src/cursor.mjs';
 import { aggregate } from '../src/aggregate.mjs';
 import { buildSummary } from '../src/report.mjs';
@@ -140,5 +141,83 @@ test('Cursor activity counts sessions without tokens, and reports drop token col
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Cursor's database: one chat that also has a transcript, one without, and a draft.
+async function userDir() {
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = await mkdtemp(path.join(tmpdir(), 'ccreports-cursor-user-'));
+  const project = path.join(dir, 'App');
+  const ws = path.join(dir, 'workspaceStorage', 'abc');
+  await mkdir(path.join(dir, 'globalStorage'), { recursive: true });
+  await mkdir(ws, { recursive: true });
+  await mkdir(project);
+  await writeFile(path.join(ws, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(project).href }));
+  const wdb = new DatabaseSync(path.join(ws, 'state.vscdb'));
+  wdb.exec('create table ItemTable (key text, value text)');
+  wdb.prepare('insert into ItemTable values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: [{ composerId: 'old-1' }] }));
+  wdb.close();
+
+  const db = new DatabaseSync(path.join(dir, 'globalStorage', 'state.vscdb'));
+  db.exec('create table cursorDiskKV (key text, value text)');
+  const put = (key, value) => db.prepare('insert into cursorDiskKV values (?, ?)').run(key, JSON.stringify(value));
+  put('composerData:ide-1', { unifiedMode: 'agent', modelConfig: { modelName: 'claude-4.5-opus-high-thinking' } });
+  put('composerData:old-1', {
+    name: 'Fix the build',
+    unifiedMode: 'plan',
+    modelConfig: { modelName: 'default' },
+    createdAt: Date.parse('2025-12-06T11:00:00Z'),
+    fullConversationHeadersOnly: [{ bubbleId: 'b1' }, { bubbleId: 'b2' }, { bubbleId: 'b3' }],
+  });
+  put('composerData:draft', { unifiedMode: 'agent', modelConfig: { modelName: 'default' } });
+  put('bubbleId:old-1:b3', { type: 2, createdAt: '2025-12-06T11:00:09Z', toolFormerData: { name: 'run_terminal_cmd', rawArgs: JSON.stringify({ command: 'git status' }) } });
+  put('bubbleId:old-1:b1', { type: 1, createdAt: '2025-12-06T11:00:02Z', text: 'never read' });
+  put('bubbleId:old-1:b2', { type: 2, createdAt: '2025-12-06T11:00:08Z', toolFormerData: { name: 'search_replace', rawArgs: '{}' } });
+  db.close();
+  return dir;
+}
+
+test("Cursor's database adds model choice and mode, and chats without a transcript", async (t) => {
+  try {
+    await import('node:sqlite');
+  } catch {
+    return t.skip('node:sqlite needs Node 22.13+');
+  }
+  const root = await fixture();
+  const dir = await userDir();
+  try {
+    const data = await loadCursorRecords({ dirs: [root], userDirs: [dir] });
+    assert.equal(data.stateSkipped, false);
+    assert.equal(data.files, 3); // two transcripts + one chat from the database; the draft is skipped
+    assert.equal(data.sessions.has('draft'), false);
+
+    // A chat with a transcript keeps its activity and gains model choice and mode.
+    const ide = data.sessions.get('ide-1');
+    assert.equal(ide.modelChoice, 'claude-4.5-opus-high-thinking');
+    assert.deepEqual([...ide.modes], ['agent']);
+
+    const old = data.sessions.get('old-1');
+    assert.equal(old.entrypoint, 'cursor-ide');
+    assert.equal(old.prompts.size, 1);
+    assert.equal(old.modelChoice, 'default');
+    assert.deepEqual([...old.modes], ['plan']);
+    assert.equal(data.titles.get('old-1'), 'Fix the build');
+    const tools = data.tools.filter((x) => x.sessionId === 'old-1');
+    assert.deepEqual(tools.map((x) => [x.name, x.timestamp]), [
+      ['search_replace', '2025-12-06T11:00:08Z'],
+      ['run_terminal_cmd', '2025-12-06T11:00:09Z'],
+    ]);
+    assert.equal(tools[0].edit, true);
+    assert.deepEqual(tools[1].shellCommands.map((c) => c.toLowerCase()), ['git']);
+    assert.equal(tools[0].project.toLowerCase(), path.join(dir, 'App').toLowerCase());
+
+    // Auto model: share of the sessions that log the model picked.
+    const stats = sessionStats(data, {});
+    assert.deepEqual(stats.filter((s) => s.autoModel).map((s) => s.id), ['old-1']);
+    assert.equal(stats.filter((s) => s.modelChoice != null).length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });
