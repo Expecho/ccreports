@@ -23,6 +23,8 @@ function cellText(cell, { csv = false } = {}) {
     if (cell.v == null) return csv ? '' : '-';
     return csv ? (cell.v * 100).toFixed(2) : `${(cell.v * 100).toFixed(1)}%`;
   }
+  // Shares drawn as one stacked bar (HTML); as text: "Chat 40.0% · Assisted 20.0%".
+  if (cell.kind === 'stack') return cell.parts.map((p) => `${p.label} ${cellText({ kind: 'pct', v: p.v })}`).join(' · ');
   return String(cell);
 }
 
@@ -82,6 +84,7 @@ export function toTerminal(doc, { color = false, version } = {}) {
   const c = paint(color);
   const out = [c.bold(doc.title)];
   if (doc.coverage) out.push(c.dim(`Data: ${doc.coverage.text}`));
+  if (doc.kpis?.length) out.push(doc.kpis.map((k) => `${c.bold(kpiValue(k))} ${k.label}`).join(' · '));
   if (doc.summary?.length) out.push(...doc.summary.map((l) => `• ${l}`), '');
   doc.sections.forEach((s, i) => {
     if (s.title) out.push((i > 0 ? '\n' : '') + c.bold(s.title) + (s.note ? c.dim(`  (${s.note})`) : ''));
@@ -122,6 +125,7 @@ const mdEscape = (s) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/
 export function toMarkdown(doc, { version } = {}) {
   const out = [`# ${doc.title}`];
   if (doc.coverage) out.push('', `_Data: ${doc.coverage.text}_`);
+  if (doc.kpis?.length) out.push('', doc.kpis.map((k) => `**${kpiValue(k)}** ${k.label}`).join(' · '));
   if (doc.summary?.length) out.push('', ...doc.summary.map((l) => `- ${l}`));
   for (const s of doc.sections) {
     out.push('');
@@ -215,6 +219,12 @@ function htmlTable({ columns, rows, fold }) {
               ? '<button type="button" class="toggle" aria-expanded="false" aria-label="Show breakdown"></button>'
               : '';
           // Clipped paths show in full on hover.
+          if (cell?.kind === 'stack') {
+            const segs = cell.parts
+              .map((p, n) => (p.v ? `<span class="seg seg${n}" style="width:${(p.v * 100).toFixed(2)}%" title="${esc(`${p.label} ${cellText({ kind: 'pct', v: p.v })}`)}"></span>` : ''))
+              .join('');
+            return `<td class="left stackcell" title="${esc(cellText(cell))}"><div class="stack">${segs}</div></td>`;
+          }
           const text = cellText(cell);
           const shown = clipStart(text, col, r);
           if (shown !== text) attrs.push(`title="${esc(text)}"`);
@@ -222,7 +232,8 @@ function htmlTable({ columns, rows, fold }) {
         })
         .join('');
       const rowAttrs = [];
-      if (r.style) rowAttrs.push(`class="${r.style}"`);
+      const rowClasses = [r.style, r.muted && 'muted'].filter(Boolean);
+      if (rowClasses.length) rowAttrs.push(`class="${rowClasses.join(' ')}"`);
       if (folded && r.style !== 'total' && ++shownRows > fold) rowAttrs.push('hidden');
       if (isSub) rowAttrs.push(`data-parent="${group}" hidden`);
       if (hasChildren) rowAttrs.push(`data-group="${group}"`);
@@ -275,25 +286,85 @@ function htmlCards({ columns, rows }) {
   return `<div class="cards">${cards.join('\n')}</div>`;
 }
 
+const slug = (s) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+/** A headline figure: 1,234 · $56.78 · 1.2B tokens. */
+export function kpiValue({ value, usd, compact }) {
+  if (usd) return cellText({ kind: 'usd', v: value });
+  if (compact) {
+    for (const [n, unit] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']]) {
+      if (value >= n) return `${(value / n).toLocaleString('en-US', { maximumFractionDigits: value >= n * 100 ? 0 : 1 })}${unit}`;
+    }
+  }
+  return value.toLocaleString('en-US');
+}
+
+/**
+ * A section whose columns start..start+count are shares of one whole (phases
+ * per week): those columns become one stacked bar, with a legend.
+ */
+function stackSection(s) {
+  const { start, count, title } = s.stack;
+  const labels = s.columns.slice(start, start + count).map((c) => c.title.replace(/^Phase \d · /, ''));
+  return {
+    ...s,
+    legend: labels,
+    columns: [...s.columns.slice(0, start), { title, align: 'left' }, ...s.columns.slice(start + count)],
+    rows: s.rows.map((r) => ({
+      ...r,
+      cells: [
+        ...r.cells.slice(0, start),
+        { kind: 'stack', parts: r.cells.slice(start, start + count).map((c, i) => ({ label: labels[i], v: c?.v ?? 0 })) },
+        ...r.cells.slice(start + count),
+      ],
+    })),
+  };
+}
+
 export function toHtml(doc, { generatedAt = new Date(), pricingSource, version, copilot = false } = {}) {
   const meta = [`Generated ${generatedAt.toLocaleString('sv-SE').slice(0, 16)}${version ? ` with ccreports ${version}` : ''}`];
   if (copilot) meta.push('GitHub Copilot cost from its billed AI credits');
   if (pricingSource) {
     meta.push(`${copilot ? 'other ' : ''}cost estimates at ${pricingSource === 'builtin' ? 'built-in ' : ''}Claude API list prices`);
   }
+  // Section ids for the table of contents.
+  const ids = new Map();
+  const idOf = (s, n) => {
+    if (!ids.has(s)) ids.set(s, `s${n + 1}-${slug(s.title ?? '')}`);
+    return ids.get(s);
+  };
+  const toc =
+    doc.sections.filter((s) => s.title).length > 3
+      ? `<nav class="toc" aria-label="Contents">${doc.sections
+          .map((s, n) => (s.title ? `<a href="#${idOf(s, n)}">${esc(s.title)}</a>` : ''))
+          .join('')}</nav>\n`
+      : '';
   const sections = doc.sections
-    .map((s) => {
-      const heading = s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
+    .map((section, n) => {
+      const s = section.stack ? stackSection(section) : section;
+      const id = idOf(section, n);
+      const heading = s.title ? `<h2 id="${id}">${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
       // Reference material: collapsed, the heading opens it.
       if (s.notes)
         return `<section class="method"><details><summary>${heading}</summary>
 <dl>${s.notes.map((n) => `<dt>${esc(n.term)}</dt><dd>${escCode(n.text)}</dd>`).join('')}</dl></details></section>`;
       if (s.items) return `<section class="plain">${heading}\n${htmlItems(s.items)}</section>`;
-      return s.cards ? `<section class="plain">${heading}\n${htmlCards(s)}</section>` : `<section>${heading}\n${htmlTable(s)}</section>`;
+      if (s.cards) return `<section class="plain">${heading}\n${htmlCards(s)}</section>`;
+      const legend = s.legend
+        ? `<div class="legend">${s.legend.map((label, i) => `<span><i class="seg seg${i}"></i>${esc(label)}</span>`).join('')}</div>\n`
+        : '';
+      return `<section>${heading}\n${legend}${htmlTable(s)}</section>`;
     })
     .join('\n');
   const summary = doc.summary?.length
     ? `<ul class="summary">${doc.summary.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>\n`
+    : '';
+  const kpis = doc.kpis?.length
+    ? `<div class="kpis">${doc.kpis.map((k) => `<div class="kpi"><b>${esc(kpiValue(k))}</b><span>${esc(k.label)}</span></div>`).join('')}</div>\n`
     : '';
 
   return `<!doctype html>
@@ -309,10 +380,24 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource, version, 
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
-/* The page grows to its widest table: one horizontal scrollbar for the page, not one per table. */
-main { padding:24px 16px 48px; width:fit-content; min-width:100%; }
-/* Text stays at window width when the page is wider. */
-.meta, .summary, section.plain, section.method { max-width:calc(100vw - 32px); }
+/* Sections keep to the window; a table wider than its section scrolls on its own. */
+main { padding:24px 16px 48px; max-width:100%; }
+.scroll { overflow-x:auto; }
+.kpis { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 16px; }
+.kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 16px; min-width:120px; }
+.kpi b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+.kpi span { color:var(--muted); font-size:13px; }
+.toc { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 16px; }
+.toc a { font-size:13px; color:var(--fg); text-decoration:none; border:1px solid var(--line); border-radius:999px; padding:2px 10px; background:var(--card); }
+.toc a:hover { border-color:var(--accent); color:var(--accent); }
+h2[id] { scroll-margin-top:12px; }
+:root { --seg0:#9ca3af; --seg1:#93c5fd; --seg2:#3b82f6; --seg3:#7c3aed; }
+.seg0 { background:var(--seg0); } .seg1 { background:var(--seg1); } .seg2 { background:var(--seg2); } .seg3 { background:var(--seg3); }
+.stackcell { min-width:260px; width:40%; }
+.stack { display:flex; height:14px; border-radius:4px; overflow:hidden; background:var(--line); }
+.legend { display:flex; flex-wrap:wrap; gap:14px; margin:0 0 8px; font-size:13px; color:var(--muted); }
+.legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+tr.muted td { opacity:.5; }
 h1 { font-size:22px; margin:0 0 4px; }
 .meta { color:var(--muted); margin:0 0 20px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 16px; }
@@ -377,7 +462,7 @@ tbody tr:not(.total):hover td { background-color:var(--bar); }
 <main>
 <h1>${esc(doc.title)}</h1>
 <p class="meta">${doc.coverage ? `<strong>Data: ${esc(doc.coverage.text)}</strong> · ` : ''}${esc(meta.join(' · '))}</p>
-${summary}${sections}
+${kpis}${summary}${toc}${sections}
 </main>
 <script>
 // Breakdown: click a row (or its toggle) to show/hide its sub-rows; the

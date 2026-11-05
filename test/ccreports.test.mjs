@@ -409,3 +409,14 @@ test('records the permission modes a session ran in', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('session report: intent, phase and prompts per session', () => {
+  const rec = { timestamp: '2026-10-01T10:00:00Z', sessionId: 's1', project: '/p', agent: null, name: 'Bash' };
+  const data = { usage: [], tools: [rec], skills: [], commands: [], hooks: [], titles: new Map() };
+  const sessionInfo = new Map([['s1', { intent: 'Bug fix', phase: 'Agent-first', prompts: 3 }]]);
+  const { columns, rows } = buildPeriodReport('session', aggregate(data, { report: 'session' }), { sessionInfo }).sections[0];
+  const at = (t) => columns.findIndex((c) => c.title === t);
+  assert.deepEqual([at('Last Activity') + 1, at('Phase'), at('Prompts')], [at('Intent'), at('Intent') + 1, at('Intent') + 2]);
+  assert.deepEqual([rows[0].cells[at('Intent')], rows[0].cells[at('Phase')], rows[0].cells[at('Prompts')]], ['Bug fix', 'Agent-first', 3]);
+  assert.equal(rows.at(-1).cells[at('Intent')], ''); // totals row
+});

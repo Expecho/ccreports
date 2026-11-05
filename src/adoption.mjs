@@ -272,6 +272,8 @@ export function buildAdoption(data, opts) {
   }
   const weeks = [...weekMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
   const weekRows = weeks.map((w) => ({
+    // Weeks with only a session or two swing between 0% and 100%.
+    muted: w.total < 3,
     cells: [
       w.key,
       w.total,
@@ -327,7 +329,9 @@ export function buildAdoption(data, opts) {
       { title: 'Adoption cohorts', note: `sessions by how they used ${opts.product ?? 'Claude Code'}`, cards: true, columns: cohortColumns, rows: cohortRows },
       {
         title: 'Phase mix per week',
-        note: 'by the week a session started',
+        note: 'by the week a session started; weeks with fewer than 3 sessions are dimmed',
+        // HTML draws the phase shares as one stacked bar.
+        stack: { start: 2, count: PHASES.length, title: 'Phase mix' },
         columns: [
           left('Week'),
           right('Sessions'),

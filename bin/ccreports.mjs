@@ -12,7 +12,7 @@ import { buildPeriodReport, buildSummary } from '../src/report.mjs';
 import { coverage, methodSection } from '../src/method.mjs';
 import { FORMATS, toTerminal, toMarkdown, toCsv, toHtml } from '../src/formats.mjs';
 import { loadPricingTable, createPricer } from '../src/pricing.mjs';
-import { buildAdoption, buildIntents, parseIntents, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
+import { buildAdoption, buildIntents, parseIntents, sessionStats, PHASES, AUTONOMY_THRESHOLD } from '../src/adoption.mjs';
 import { INTENTS } from '../src/intent.mjs';
 import { buildRecommendations } from '../src/recommendations.mjs';
 import { openFile, FORMAT_EXTENSIONS } from '../src/open.mjs';
@@ -215,7 +215,9 @@ if (showCost) {
 }
 
 const result = aggregate(data, { report, since, until, project: opts.project, timeZone: opts.timezone, pricer });
-if (opts.order === 'desc') result.buckets.reverse();
+// Documents read top-down list the newest session first; --order overrides.
+const newestFirst = !opts.order && report === 'session' && ['html', 'markdown'].includes(format);
+if (opts.order === 'desc' || newestFirst) result.buckets.reverse();
 
 // Warnings go to stderr so redirected output stays clean.
 if (showCost) {
@@ -290,6 +292,18 @@ const usageLimits = ['adoption', 'recommendations'].includes(report)
 // The period the data covers: first to last activity within the filters.
 const range = coverage(result.totals, { timeZone: opts.timezone });
 
+// Per-session phase, intent, prompts and PRs (the adoption assessment's stats):
+// columns of the session table and figures in the headline.
+const documentFormat = ['table', 'markdown', 'html'].includes(format);
+const perSession = adoption?.stats ?? (documentFormat && result.totals.sessions.size ? sessionStats(data, docOpts) : null);
+if (perSession && report === 'session') {
+  const phaseTitle = Object.fromEntries(PHASES.map((p) => [p.key, p.title.replace(/^Phase \d · /, '')]));
+  const intentTitle = Object.fromEntries(INTENTS.map((i) => [i.key, i.title]));
+  docOpts.sessionInfo = new Map(
+    perSession.map((s) => [s.id, { phase: phaseTitle[s.phase] ?? '', intent: intentTitle[s.intent] ?? '', prompts: s.prompts }]),
+  );
+}
+
 let output;
 if (format === 'json') {
   const meta = { report, source, since, until, pricingSource, ccreportsVersion: VERSION };
@@ -358,6 +372,7 @@ if (format === 'json') {
   }
   doc = {
     ...doc,
+    kpis: headline(result.totals, perSession, { showCost, tokens: data.usage.length > 0 }),
     coverage: range,
     sections: [...doc.sections.filter((s) => !s.main), ...tail, ...doc.sections.filter((s) => s.main)],
   };
@@ -389,4 +404,17 @@ if (file) {
   }
 } else {
   process.stdout.write(output);
+}
+
+/** The headline figures: sessions, prompts, tool calls, PRs, tokens and cost. */
+function headline(totals, perSession, { showCost, tokens }) {
+  const sum = (f) => perSession.reduce((n, s) => n + f(s), 0);
+  return [
+    { label: 'sessions', value: totals.sessions.size },
+    ...(perSession ? [{ label: 'prompts', value: sum((s) => s.prompts) }] : []),
+    { label: 'tool calls', value: totals.toolCalls },
+    ...(perSession ? [{ label: 'pull requests', value: sum((s) => s.prs) }] : []),
+    ...(tokens ? [{ label: 'tokens', value: totals.totalTokens, compact: true }] : []),
+    ...(showCost ? [{ label: 'estimated cost', value: totals.costUSD, usd: true }] : []),
+  ];
 }

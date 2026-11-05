@@ -222,6 +222,11 @@ function estimateCells(usage, totals, opts) {
   ];
 }
 
+/** Intent, phase and prompts of a session, from the adoption assessment's per-session stats. */
+function sessionInfoCells(info) {
+  return info ? [info.intent, info.phase, info.prompts] : ['', '', ''];
+}
+
 // Rows a long HTML table shows before "Show all".
 const FOLD_ROWS = 15;
 
@@ -247,7 +252,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   const hasSubRows = breakdown || shell;
   const isSession = report === 'session';
   const lead = isSession
-    ? [left('Session', SESSION_NAME_MAX), ...(opts.toolColumn ? [left('Tool')] : []), path('Project'), left('Last Activity')]
+    ? [
+        left('Session', SESSION_NAME_MAX),
+        ...(opts.toolColumn ? [left('Tool')] : []),
+        path('Project'),
+        left('Last Activity'),
+        ...(opts.sessionInfo ? [left('Intent'), left('Phase'), right('Prompts')] : []),
+      ]
     : [report === 'project' ? path('Project') : left(PERIOD[report].title)];
   // A session row is always one session, so the per-session columns only make
   // sense for the other reports. Per Session is filled on breakdown sub-rows.
@@ -287,7 +298,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   for (const b of buckets) {
     const models = ranked(b.models, (m) => m.totalTokens).map(([m]) => shortModel(m));
     const leadCells = isSession
-      ? [sessionName(b.title ?? b.key.slice(0, 8)), ...(opts.toolColumn ? [b.tool] : []), [...b.projects][0] ?? '', localTime(b.lastActivity, timeZone)]
+      ? [
+          sessionName(b.title ?? b.key.slice(0, 8)),
+          ...(opts.toolColumn ? [b.tool] : []),
+          [...b.projects][0] ?? '',
+          localTime(b.lastActivity, timeZone),
+          ...(opts.sessionInfo ? sessionInfoCells(opts.sessionInfo.get(b.key)) : []),
+        ]
       : [b.key];
     rows.push({
       cells: [
