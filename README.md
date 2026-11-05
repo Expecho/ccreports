@@ -83,7 +83,11 @@ It also appears as `coverage` in JSON. HTML reports add a **How it's measured**
 section above the period table. It describes the data read, the period and
 time zone, and how sessions, tokens, cost, tools, usage limits, adoption phases,
 session intent and recommendations are counted, covering only what the
-report contains.
+report contains. The section starts collapsed. HTML also folds what is long:
+the period report's Skills table shows its top 15 rows with a *Show all*
+button, and the sort order is kept when it folds. Recommendations with low
+impact or under $1 at stake sit under a "more" toggle. Table, Markdown and
+CSV output keep everything open.
 
 The `session` report names each session by its title (the first 8 characters
 of its id when it has none), cut to at most 35 characters with `…` in every

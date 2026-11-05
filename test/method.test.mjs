@@ -47,10 +47,35 @@ test('documents render the notes and the covered period; CSV keeps the period ta
   };
   const html = toHtml(doc);
   assert.match(html, /<strong>Data: 2026-10-01 → 2026-10-30 \(30 days\)<\/strong>/);
-  assert.match(html, /<section class="method"><h2>How it&#39;s measured<\/h2>\n<dl><dt>Data<\/dt><dd>local <code>logs<\/code><\/dd><\/dl>/);
+  assert.match(html, /<section class="method"><details><summary><h2>How it&#39;s measured<\/h2><\/summary>\n<dl><dt>Data<\/dt><dd>local <code>logs<\/code><\/dd><\/dl>/);
   assert.ok(html.indexOf('Skills') < html.indexOf('How it&#39;s measured') && html.indexOf('How it&#39;s measured') < html.indexOf('Usage per session'));
   const md = toMarkdown(doc);
+  assert.doesNotMatch(md, /<details>/);
   assert.match(md, /_Data: 2026-10-01 → 2026-10-30 \(30 days\)_/);
   assert.match(md, /- \*\*Data:\*\* local `logs`/);
   assert.equal(toCsv(doc), 'Session\ns1\n\nSkill\nplan\n');
+});
+
+test('HTML folds long tables and minor recommendations', () => {
+  const rows = Array.from({ length: 20 }, (_, i) => ({ cells: [`s${i}`] }));
+  const html = toHtml({ title: 'x', sections: [{ title: 'Skills', fold: 15, columns: [{ title: 'Skill' }], rows }] });
+  assert.equal((html.match(/<tr hidden>/g) ?? []).length, 5);
+  assert.match(html, /<table data-fold="15">/);
+  assert.match(html, /data-fold-toggle[^>]*>Show all 20</);
+  // A couple of extra rows are not worth a button.
+  const short = toHtml({ title: 'x', sections: [{ title: 'Skills', fold: 15, columns: [{ title: 'Skill' }], rows: rows.slice(0, 17) }] });
+  assert.doesNotMatch(short, /<table data-fold/);
+
+  const item = (title, impact, atStakeUSD = null) => ({ title, impact, atStakeUSD, evidence: 'e', advice: 'a' });
+  const recs = toHtml({
+    title: 'x',
+    sections: [{ title: 'R', items: [item('Big', 'high', 400), item('Cheap', 'medium', 0.2), item('Small', 'low')] }],
+  });
+  const [open, more] = recs.split('<details class="more">');
+  assert.match(open, /Big/);
+  assert.doesNotMatch(open, /Cheap|Small/);
+  assert.match(more, /^<summary>2 more, with less at stake<\/summary><ol class="recs" start="2">.*Cheap.*Small/s);
+  // Only minor items: the first stays open.
+  const onlyLow = toHtml({ title: 'x', sections: [{ title: 'R', items: [item('Small', 'low')] }] });
+  assert.doesNotMatch(onlyLow, /<details class="more"/);
 });

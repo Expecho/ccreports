@@ -181,8 +181,13 @@ export function toCsv(doc) {
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
-function htmlTable({ columns, rows }) {
+function htmlTable({ columns, rows, fold }) {
   const hasSubRows = rows.some((r) => r.style === 'sub');
+  // Long tables show their first `fold` rows; a button opens the rest. Folding
+  // only pays off when it hides more than a couple of rows.
+  const bodyRows = rows.filter((r) => r.style !== 'total').length;
+  const folded = !hasSubRows && fold > 0 && bodyRows > fold + 2;
+  let shownRows = 0;
   const sortable = !hasSubRows;
   const head = columns
     .map((col) => `<th class="${col.align}"${sortable ? ' data-sort' : ''}>${esc(col.title)}</th>`)
@@ -218,6 +223,7 @@ function htmlTable({ columns, rows }) {
         .join('');
       const rowAttrs = [];
       if (r.style) rowAttrs.push(`class="${r.style}"`);
+      if (folded && r.style !== 'total' && ++shownRows > fold) rowAttrs.push('hidden');
       if (isSub) rowAttrs.push(`data-parent="${group}" hidden`);
       if (hasChildren) rowAttrs.push(`data-group="${group}"`);
       return `<tr${rowAttrs.length ? ' ' + rowAttrs.join(' ') : ''}>${cells}</tr>`;
@@ -227,7 +233,10 @@ function htmlTable({ columns, rows }) {
   const controls = hasSubRows
     ? '<div class="controls"><button type="button" data-expand="all">Expand all</button><button type="button" data-expand="none">Collapse all</button></div>\n'
     : '';
-  return `${controls}<div class="scroll"><table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>`;
+  const more = folded
+    ? `\n<div class="controls fold"><button type="button" data-fold-toggle aria-expanded="false" data-more="Show all ${bodyRows}" data-less="Show top ${fold}">Show all ${bodyRows}</button></div>`
+    : '';
+  return `${controls}<div class="scroll"><table${folded ? ` data-fold="${fold}"` : ''}>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>${more}`;
 }
 
 /**
@@ -237,12 +246,22 @@ function htmlTable({ columns, rows }) {
 /** Escaped text with `inline code` as <code>. */
 const escCode = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 
+/** Low impact, or less than $1 at stake: listed under "more", folded. */
+export const minorItem = (item) => item.impact === 'low' || (item.atStakeUSD != null && item.atStakeUSD < 1);
+
 function htmlItems(items) {
-  const list = items.map(
-    (item, n) =>
-      `<li class="rec ${item.impact}"><div class="rec-head"><span class="rec-n">${n + 1}</span><h3>${esc(item.title)}</h3><span class="badge">${esc(itemImpact(item))}</span></div><p class="evidence">${escCode(item.evidence)}</p><p class="advice">${escCode(item.advice)}</p></li>`,
-  );
-  return `<ol class="recs">${list.join('\n')}</ol>`;
+  const li = (item, n) =>
+    `<li class="rec ${item.impact}"><div class="rec-head"><span class="rec-n">${n + 1}</span><h3>${esc(item.title)}</h3><span class="badge">${esc(itemImpact(item))}</span></div><p class="evidence">${escCode(item.evidence)}</p><p class="advice">${escCode(item.advice)}</p></li>`;
+  // Items come most impact first, so the minor ones are a tail; at least one stays open.
+  let main = items.findIndex(minorItem);
+  if (main === -1) main = items.length;
+  if (main === 0) main = 1;
+  const open = items.slice(0, main).map((item, n) => li(item, n));
+  const rest = items.slice(main).map((item, n) => li(item, main + n));
+  const more = rest.length
+    ? `\n<details class="more"><summary>${rest.length} more, with less at stake</summary><ol class="recs" start="${main + 1}">${rest.join('\n')}</ol></details>`
+    : '';
+  return `<ol class="recs">${open.join('\n')}</ol>${more}`;
 }
 
 function htmlCards({ columns, rows }) {
@@ -265,8 +284,10 @@ export function toHtml(doc, { generatedAt = new Date(), pricingSource, version, 
   const sections = doc.sections
     .map((s) => {
       const heading = s.title ? `<h2>${esc(s.title)}${s.note ? ` <span class="note">${esc(s.note)}</span>` : ''}</h2>` : '';
-      if (s.notes) return `<section class="method">${heading}
-<dl>${s.notes.map((n) => `<dt>${esc(n.term)}</dt><dd>${escCode(n.text)}</dd>`).join('')}</dl></section>`;
+      // Reference material: collapsed, the heading opens it.
+      if (s.notes)
+        return `<section class="method"><details><summary>${heading}</summary>
+<dl>${s.notes.map((n) => `<dt>${esc(n.term)}</dt><dd>${escCode(n.text)}</dd>`).join('')}</dl></details></section>`;
       if (s.items) return `<section class="plain">${heading}\n${htmlItems(s.items)}</section>`;
       return s.cards ? `<section class="plain">${heading}\n${htmlCards(s)}</section>` : `<section>${heading}\n${htmlTable(s)}</section>`;
     })
@@ -313,6 +334,13 @@ section.method dt { font-weight:600; } section.method dd { margin:0; color:var(-
 .badge { margin-left:auto; font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:1px 8px; }
 .evidence { color:var(--muted); margin:6px 0 4px; }
 .advice { margin:0; }
+details.more { margin-top:10px; }
+details.more > summary, section.method summary { cursor:pointer; color:var(--muted); }
+details.more > summary:hover, section.method summary:hover { color:var(--accent); }
+details.more > .recs { margin-top:10px; }
+section.method summary h2 { display:inline; margin:0; color:var(--fg); }
+section.method details[open] > summary { margin-bottom:10px; }
+.controls.fold { margin:10px 0 0; }
 code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.5px; background:var(--bar); border-radius:4px; padding:0 4px; }
 .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
@@ -382,6 +410,25 @@ document.querySelectorAll('th[data-sort]').forEach((th) => {
     const key = (r) => { const c = r.cells[i]; return c.dataset.v !== undefined ? Number(c.dataset.v) : c.textContent; };
     rows.sort((a, b) => { const x = key(a), y = key(b); const d = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y)); return dir === 'asc' ? d : -d; });
     rows.forEach((r) => body.insertBefore(r, body.querySelector('tr.total')));
+    applyFold(table);
+  });
+});
+
+// Folded tables: the first data-fold rows, all of them once opened; kept after sorting.
+function applyFold(table) {
+  const n = Number(table.dataset.fold);
+  if (!n) return;
+  const open = table.dataset.open === 'true';
+  [...table.tBodies[0].rows].filter((r) => !r.classList.contains('total')).forEach((r, i) => (r.hidden = !open && i >= n));
+}
+document.querySelectorAll('[data-fold-toggle]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const table = btn.closest('section').querySelector('table[data-fold]');
+    const open = table.dataset.open !== 'true';
+    table.dataset.open = String(open);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.textContent = open ? btn.dataset.less : btn.dataset.more;
+    applyFold(table);
   });
 });
 </script>

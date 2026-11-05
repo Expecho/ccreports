@@ -222,6 +222,9 @@ function estimateCells(usage, totals, opts) {
   ];
 }
 
+// Rows a long HTML table shows before "Show all".
+const FOLD_ROWS = 15;
+
 /** Every skill used, by who invoked it; `top` > 0 keeps the first rows. */
 function skillSection(totals, opts, top = 0) {
   const entries = ranked(totals.skills, (s) => s.model + s.user);
@@ -229,6 +232,8 @@ function skillSection(totals, opts, top = 0) {
   const shown = top > 0 ? entries.slice(0, top) : entries;
   return {
     title: 'Skills',
+    // HTML shows the first rows and a button for the rest.
+    fold: top > 0 ? undefined : FOLD_ROWS,
     note: shown.length < entries.length ? `top ${shown.length} of ${entries.length}` : undefined,
     columns: [left('Skill'), right('By model'), right('By user'), right('Total'), ...estimateColumns(opts)],
     rows: shown.map(([name, s]) => ({

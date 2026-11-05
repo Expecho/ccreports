@@ -223,9 +223,9 @@ export function buildAdoption(data, opts) {
   const cohortColumns = [
     left('Phase'),
     left('How'),
-    right('PRs per session'),
+    right('Of sessions'),
     right('Sessions'),
-    right('Share of sessions'),
+    right('PRs per session'),
     right('PRs'),
     right('Edits per session'),
     right('Median tool calls per prompt'),
@@ -244,9 +244,9 @@ export function buildAdoption(data, opts) {
       cells: [
         p.title,
         p.description.replace(/^Claude\b/, agentName),
-        average(prs, list.length),
-        list.length,
         share(list.length, stats.length),
+        list.length,
+        average(prs, list.length),
         prs,
         average(sum(list, (s) => s.edits), list.length),
         m == null ? '' : average(m, 1),
