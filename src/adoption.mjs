@@ -223,9 +223,9 @@ export function buildAdoption(data, opts) {
   const cohortColumns = [
     left('Phase'),
     left('How'),
-    right('PRs per session'),
+    right('Of sessions'),
     right('Sessions'),
-    right('Share of sessions'),
+    right('PRs per session'),
     right('PRs'),
     right('Edits per session'),
     right('Median tool calls per prompt'),
@@ -244,9 +244,9 @@ export function buildAdoption(data, opts) {
       cells: [
         p.title,
         p.description.replace(/^Claude\b/, agentName),
-        average(prs, list.length),
-        list.length,
         share(list.length, stats.length),
+        list.length,
+        average(prs, list.length),
         prs,
         average(sum(list, (s) => s.edits), list.length),
         m == null ? '' : average(m, 1),
@@ -272,6 +272,8 @@ export function buildAdoption(data, opts) {
   }
   const weeks = [...weekMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
   const weekRows = weeks.map((w) => ({
+    // Weeks with only a session or two swing between 0% and 100%.
+    muted: w.total < 3,
     cells: [
       w.key,
       w.total,
@@ -327,7 +329,9 @@ export function buildAdoption(data, opts) {
       { title: 'Adoption cohorts', note: `sessions by how they used ${opts.product ?? 'Claude Code'}`, cards: true, columns: cohortColumns, rows: cohortRows },
       {
         title: 'Phase mix per week',
-        note: 'by the week a session started',
+        note: 'by the week a session started; weeks with fewer than 3 sessions are dimmed',
+        // HTML draws the phase shares as one stacked bar.
+        stack: { start: 2, count: PHASES.length, title: 'Phase mix' },
         columns: [
           left('Week'),
           right('Sessions'),

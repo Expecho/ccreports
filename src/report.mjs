@@ -145,11 +145,11 @@ function rangeText({ since, until }) {
 }
 
 const PERIOD = {
-  daily: { title: 'Date', name: 'daily' },
-  weekly: { title: 'Week', name: 'weekly' },
-  monthly: { title: 'Month', name: 'monthly' },
-  session: { title: 'Session', name: 'per-session' },
-  project: { title: 'Project', name: 'per-project' },
+  daily: { title: 'Date', name: 'daily', rows: 'Usage per day' },
+  weekly: { title: 'Week', name: 'weekly', rows: 'Usage per week' },
+  monthly: { title: 'Month', name: 'monthly', rows: 'Usage per month' },
+  session: { title: 'Session', name: 'per-session', rows: 'Usage per session' },
+  project: { title: 'Project', name: 'per-project', rows: 'Usage per project' },
 };
 
 /** daily / weekly / monthly / session / project report. */
@@ -222,6 +222,14 @@ function estimateCells(usage, totals, opts) {
   ];
 }
 
+/** Intent, phase and prompts of a session, from the adoption assessment's per-session stats. */
+function sessionInfoCells(info) {
+  return info ? [info.intent, info.phase, info.prompts] : ['', '', ''];
+}
+
+// Rows a long HTML table shows before "Show all".
+const FOLD_ROWS = 15;
+
 /** Every skill used, by who invoked it; `top` > 0 keeps the first rows. */
 function skillSection(totals, opts, top = 0) {
   const entries = ranked(totals.skills, (s) => s.model + s.user);
@@ -229,6 +237,8 @@ function skillSection(totals, opts, top = 0) {
   const shown = top > 0 ? entries.slice(0, top) : entries;
   return {
     title: 'Skills',
+    // HTML shows the first rows and a button for the rest.
+    fold: top > 0 ? undefined : FOLD_ROWS,
     note: shown.length < entries.length ? `top ${shown.length} of ${entries.length}` : undefined,
     columns: [left('Skill'), right('By model'), right('By user'), right('Total'), ...estimateColumns(opts)],
     rows: shown.map(([name, s]) => ({
@@ -242,7 +252,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   const hasSubRows = breakdown || shell;
   const isSession = report === 'session';
   const lead = isSession
-    ? [left('Session', SESSION_NAME_MAX), path('Project'), left('Last Activity')]
+    ? [
+        left('Session', SESSION_NAME_MAX),
+        ...(opts.toolColumn ? [left('Tool')] : []),
+        path('Project'),
+        left('Last Activity'),
+        ...(opts.sessionInfo ? [left('Intent'), left('Phase'), right('Prompts')] : []),
+      ]
     : [report === 'project' ? path('Project') : left(PERIOD[report].title)];
   // A session row is always one session, so the per-session columns only make
   // sense for the other reports. Per Session is filled on breakdown sub-rows.
@@ -282,7 +298,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   for (const b of buckets) {
     const models = ranked(b.models, (m) => m.totalTokens).map(([m]) => shortModel(m));
     const leadCells = isSession
-      ? [sessionName(b.title ?? b.key.slice(0, 8)), [...b.projects][0] ?? '', localTime(b.lastActivity, timeZone)]
+      ? [
+          sessionName(b.title ?? b.key.slice(0, 8)),
+          ...(opts.toolColumn ? [b.tool] : []),
+          [...b.projects][0] ?? '',
+          localTime(b.lastActivity, timeZone),
+          ...(opts.sessionInfo ? sessionInfoCells(opts.sessionInfo.get(b.key)) : []),
+        ]
       : [b.key];
     rows.push({
       cells: [
@@ -334,7 +356,13 @@ export function buildPeriodReport(report, { buckets, totals }, opts) {
   return {
     title: `${opts.product ?? 'Claude Code'} ${PERIOD[report].name} usage${rangeText(opts)}`,
     // All skills: --top limits the per-row breakdown, not this list.
-    sections: [{ columns, rows }, skillSection(totals, opts), ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : [])].filter(
+    // The period table is the report's own (`main`): the CLI moves it below the
+    // other sections in documents, CSV keeps it first.
+    sections: [
+      { title: PERIOD[report].rows, note: hasSubRows ? 'click a row for its breakdown' : undefined, main: true, columns, rows },
+      skillSection(totals, opts),
+      ...(opts.plugins?.length ? [pluginSection(opts.plugins)] : []),
+    ].filter(
       Boolean,
     ),
   };

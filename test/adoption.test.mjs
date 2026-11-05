@@ -73,7 +73,8 @@ test('buildAdoption: cohorts, weekly mix, capabilities, surfaces and summary', (
   assert.equal(cohorts.cards, true);
   const agentRow = cohorts.rows[2].cells;
   assert.equal(agentRow[0], 'Phase 2 · Agent-first');
-  assert.deepEqual(agentRow[2], { kind: 'avg', v: 2 }); // PRs per session
+  assert.deepEqual(agentRow[2], { kind: 'pct', v: 0.25 }); // headline: share of sessions
+  assert.deepEqual(agentRow[cohorts.columns.findIndex((c) => c.title === 'PRs per session')], { kind: 'avg', v: 2 });
   assert.equal(agentRow[3], 1); // sessions
   assert.deepEqual(agentRow[cohorts.columns.findIndex((c) => c.title === 'Plan mode')], { kind: 'pct', v: 1 });
   assert.deepEqual(weekly.rows.map((r) => r.cells[0]), ['2026-09-28']); // Oct 1-4, 2026 is Thu-Sun of one week

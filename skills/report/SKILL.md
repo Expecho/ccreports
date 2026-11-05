@@ -50,6 +50,9 @@ Useful options: `-s/--since` and `-u/--until` (`YYYYMMDD`), `-p/--project <text>
 - For a page to view or share, write HTML to a file in the current working
   directory unless the user names another place, e.g.
   `-f html -o ccreports-adoption.html`, then give the user the full path.
+  HTML reports list the overview first, then a *How it's measured* section
+  and the period table (per session, day, ...) at the bottom; the header
+  names the period the data covers.
   When they ask to see or open it, add `--open`: the CLI launches the file in
   its associated app (browser for HTML, Excel for CSV). From your shell it does
   not open files unless `--open` is passed.

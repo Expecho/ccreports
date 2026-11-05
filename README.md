@@ -70,13 +70,38 @@ both, so rows can add up to more than the total. With `--breakdown`, a
 **Per Session** column gives each tool / skill / command / agent count divided
 by the row's sessions.
 
-Every period report, `session` included, ends with a **Skills** table: every
+Every period report, `session` included, has a **Skills** table: every
 skill used in the range, by model and by user, with estimated tokens and cost,
 as in the summary. `--top` limits the breakdown sub-rows, not this list.
 
+In table, Markdown and HTML output the overview comes first: skills, plugins,
+usage limits and any `-a` / `-r` sections. The period table itself (*Usage per
+session*, *per day*, ...) is at the bottom. CSV keeps the period table first.
+Every report names the period its data covers, from the first to the last
+activity within the filters, e.g. `Data: 2025-12-06 → 2026-11-04 (334 days)`.
+It also appears as `coverage` in JSON. Below it are the headline figures:
+sessions, prompts, tool calls, pull requests, tokens and estimated cost. In
+HTML these are tiles, followed by a row of links to every section. Each table
+keeps to the window width and scrolls sideways on its own. *Phase mix per
+week* draws the phase shares as one stacked bar, and weeks with fewer than 3
+sessions are dimmed. HTML reports add a **How it's measured**
+section above the period table. It describes the data read, the period and
+time zone, and how sessions, tokens, cost, tools, usage limits, adoption phases,
+session intent and recommendations are counted, covering only what the
+report contains. The section starts collapsed. HTML also folds what is long:
+the period report's Skills table shows its top 15 rows with a *Show all*
+button, and the sort order is kept when it folds. Recommendations with low
+impact or under $1 at stake sit under a "more" toggle. Table, Markdown and
+CSV output keep everything open.
+
 The `session` report names each session by its title (the first 8 characters
 of its id when it has none), cut to at most 35 characters with `…` in every
-display format. JSON keeps the full title.
+display format. JSON keeps the full title. Each session's **Intent**,
+**Phase** (as in the adoption report) and **Prompts** follow *Last Activity*.
+HTML and Markdown list the newest session first, and `--order asc|desc`
+overrides that. With `--source all` a **Tool**
+column names the AI tool each session ran in (Claude Code, GitHub Copilot or
+Cursor); JSON rows always have it as `tool`.
 
 **Tokens per tool, skill and subagent.** Breakdown sub-rows fill the token
 columns like their parent row: *Output* (the tool input the model wrote),
