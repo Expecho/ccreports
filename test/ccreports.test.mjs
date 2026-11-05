@@ -365,6 +365,29 @@ test('session names are at most 35 characters in reports', async () => {
   assert.equal(doc.sections[0].rows[0].cells[0], 'A'.repeat(34) + '…');
 });
 
+test('session report names the AI tool of each session with --source all', () => {
+  const rec = (sessionId) => ({ timestamp: '2026-10-01T10:00:00Z', sessionId, project: '/p', agent: null, name: 'Bash' });
+  const data = {
+    usage: [],
+    tools: ['c1', 'g1', 'k1'].map(rec),
+    skills: [],
+    commands: [],
+    hooks: [],
+    titles: new Map(),
+    sessions: new Map([
+      ['c1', { entrypoint: 'claude-vscode' }],
+      ['g1', { entrypoint: 'copilot-cli' }],
+      ['k1', { entrypoint: 'cursor-ide' }],
+    ]),
+  };
+  const result = aggregate(data, { report: 'session' });
+  assert.deepEqual(result.buckets.map((b) => [b.key, b.tool]), [['c1', 'Claude Code'], ['g1', 'GitHub Copilot'], ['k1', 'Cursor']]);
+  const { columns, rows } = buildPeriodReport('session', result, { toolColumn: true }).sections[0];
+  assert.deepEqual(columns.slice(0, 3).map((c) => c.title), ['Session', 'Tool', 'Project']);
+  assert.deepEqual(rows.map((r) => r.cells[1]), ['Claude Code', 'GitHub Copilot', 'Cursor', '']);
+  assert.ok(!buildPeriodReport('session', result, {}).sections[0].columns.some((c) => c.title === 'Tool'));
+});
+
 test('records the permission modes a session ran in', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ccreports-'));
   try {

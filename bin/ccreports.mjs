@@ -250,6 +250,8 @@ const docOpts = {
   plugins,
   product,
   intents,
+  // Session reports over several products name each session's tool.
+  toolColumn: source === 'all',
   // No token usage at all (Cursor alone): reports leave out the token columns.
   tokens: data.usage.length > 0,
 };

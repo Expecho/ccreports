@@ -97,6 +97,13 @@ function newBucket(key) {
 
 export const MAIN_AGENT = '(main session)';
 
+/** The AI tool a session ran in, from its entrypoint (copilot-cli, cursor-ide, cli, ...). */
+export function toolOf(entrypoint) {
+  if (entrypoint?.startsWith('copilot')) return 'GitHub Copilot';
+  if (entrypoint?.startsWith('cursor')) return 'Cursor';
+  return 'Claude Code';
+}
+
 function agentEntry(bucket, type) {
   const key = type ?? MAIN_AGENT;
   if (!bucket.agents.has(key)) {
@@ -327,7 +334,10 @@ export function aggregate(data, { report = 'summary', since, until, project, tim
     b.avgContextTokens = b.contextRequests ? Math.round(b.contextTokensSum / b.contextRequests) : 0;
   }
   if (report === 'session') {
-    for (const b of list) b.title = data.titles.get(b.key) ?? null;
+    for (const b of list) {
+      b.title = data.titles.get(b.key) ?? null;
+      b.tool = toolOf(data.sessions?.get(b.key)?.entrypoint);
+    }
     list.sort((a, b) => (a.lastActivity < b.lastActivity ? -1 : 1));
   } else if (report === 'project') {
     list.sort((a, b) => a.totalTokens - b.totalTokens);

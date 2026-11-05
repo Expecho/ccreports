@@ -87,7 +87,9 @@ report contains.
 
 The `session` report names each session by its title (the first 8 characters
 of its id when it has none), cut to at most 35 characters with `…` in every
-display format. JSON keeps the full title.
+display format. JSON keeps the full title. With `--source all` a **Tool**
+column names the AI tool each session ran in (Claude Code, GitHub Copilot or
+Cursor); JSON rows always have it as `tool`.
 
 **Tokens per tool, skill and subagent.** Breakdown sub-rows fill the token
 columns like their parent row: *Output* (the tool input the model wrote),
